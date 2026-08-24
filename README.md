@@ -2,8 +2,7 @@
 
 キャラクターの切り抜きを的にする、ブラウザで動くエイムトレーナー。
 
-**プレイする → https://USERNAME.github.io/cutout-range/**
-（`USERNAME` は自分の GitHub ユーザー名に置き換えてください）
+**プレイする → https://yayoifps.github.io/aimlab/**
 
 ## 特徴
 
