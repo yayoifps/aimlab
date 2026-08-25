@@ -12,6 +12,7 @@
   --fg:#E6EEF2; --fg-dim:#8FA0AB; --fg-faint:#5B6B75;
   --accent:#FF8A3D; --accent-deep:#C7621F; --accent-glow:#FF8A3D33;
   --good:#3FE0A8; --bad:#F2564B;
+  --ice:#6CCBE8; --ice-dim:#2B4B58; --ice-glow:#6CCBE81F;
   --display:'Chakra Petch', 'Chakra Petch Fallback', system-ui, sans-serif;
   --body:'Noto Sans JP', 'Hiragino Sans', 'Yu Gothic UI', system-ui, sans-serif;
   --r:3px;
@@ -78,7 +79,12 @@ button{cursor:pointer;}
   background:var(--accent); border-color:var(--accent); color:#100A05; font-weight:700;
 }
 .gbtn.primary:hover{background:#FFA061;border-color:#FFA061;color:#100A05;}
-.gbtn.ghost{background:transparent;}
+.gbtn.ghost{
+  background:transparent; color:var(--ice); border-color:var(--ice-dim);
+}
+.gbtn.ghost:hover{
+  background:var(--ice-glow); border-color:var(--ice); color:#C4EDF8;
+}
 .buildtag{
   font-family:var(--display);font-size:9.5px;letter-spacing:.18em;text-transform:uppercase;
   color:var(--fg-faint);border:1px solid var(--line-soft);border-radius:2px;
@@ -681,7 +687,7 @@ const DEG = Math.PI/180, clamp=(v,a,b)=>v<a?a:v>b?b:v;
 /* ビルド識別子 — build_sprites.py が更新します。
    画面右上に出るので「今どの版を見ているか」がすぐ分かります。 */
 /* BUILD_BEGIN */
-const BUILD = '0825-1303';
+const BUILD = '0825-1336';
 /* BUILD_END */
 
 /* SPRITES_BEGIN */
