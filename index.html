@@ -600,9 +600,12 @@ button{cursor:pointer;}
       <label class="ctl"><span>左右の切替<small>秒／この間隔で出てくる側が入れ替わる</small></span>
         <input type="range" data-bind="sideSwap" min="1" max="20" step="0.5">
         <input type="number" class="num" data-bind="sideSwap" min="1" max="20" step="0.5"></label>
-      <label class="ctl"><span>横切る幅<small>メートル／中心から左右へ</small></span>
+      <label class="ctl"><span>開けた区間の幅<small>メートル／中心から左右の壁まで</small></span>
         <input type="range" data-bind="strafeSpan" min="2" max="12" step="0.5">
         <input type="number" class="num" data-bind="strafeSpan" min="2" max="12" step="0.5"></label>
+      <label class="ctl"><span>出入り口の幅<small>メートル／狭いほど顔を出す時間が短い</small></span>
+        <input type="range" data-bind="doorW" min="0.6" max="4" step="0.1">
+        <input type="number" class="num" data-bind="doorW" min="0.6" max="4" step="0.1"></label>
       <label class="ctl wide"><span>移動速度<small>VALORANT の走り 6.75 m/s ・ 歩き 3.4 m/s</small></span>
         <select data-bind="strafeSpeed">
           <option value="both">両方をランダム</option>
@@ -656,7 +659,7 @@ const DEG = Math.PI/180, clamp=(v,a,b)=>v<a?a:v>b?b:v;
 /* ビルド識別子 — build_sprites.py が更新します。
    画面右上に出るので「今どの版を見ているか」がすぐ分かります。 */
 /* BUILD_BEGIN */
-const BUILD = '0825-1115';
+const BUILD = '0825-1128';
 /* BUILD_END */
 
 /* SPRITES_BEGIN */
@@ -731,7 +734,7 @@ defineTask({
   center(S){ return { x:0, y:EYE, z:-S.dist }; },
 
   spawn(G,S){
-    const edge = S.strafeSpan + 0.6;              // 壁の少し外から入ってくる
+    const edge = strafeEdge(S);                   // 壁の裏（見えない位置）から歩き出す
     // 経過時間で出てくる側が入れ替わる（0〜4秒は右、4〜8秒は左…）
     const fromRight = Math.floor((G.started ? G.elapsed : 0) / S.sideSwap) % 2 === 0;
     const useRun = S.strafeSpeed==='run'  ? true
@@ -757,16 +760,69 @@ defineTask({
     }
   },
 
-  // 的が出入りする左右の開口部
+  // 壁の外にいる的は撃てない（見えていない部分は当たり判定も無い）
+  canHitAt(t, worldX, S){ return Math.abs(worldX) <= S.strafeSpan + S.doorW; },
+
+  // 的より奥。開口部と同じ面に置くことで、穴の形とぴったり合う。
   drawDecor(S){
-    const h = 2.7, z = -S.dist;
-    for(const sx of [-S.strafeSpan, S.strafeSpan]){
-      seg3D({x:sx,y:0,z:z-0.45},{x:sx,y:h,z:z-0.45}, '#C7621F', 0.30);
-      seg3D({x:sx,y:0,z:z+0.45},{x:sx,y:h,z:z+0.45}, '#C7621F', 0.30);
-      seg3D({x:sx,y:h,z:z-0.45},{x:sx,y:h,z:z+0.45}, '#C7621F', 0.30);
-    }
-  }
+    for(const s of [-1, 1]) fillPoly3D(doorOutline(s, S, WALL.z(S)), '#171F26');
+  },
+
+  // 的より手前。ここで壁の裏を隠す。
+  drawOverlay(S){ drawStrafeWalls(S); }
 });
+
+/* ── Strafe の壁 ──
+   ASCENT の A メイン（右・アーチ）と A サイト入口（左・角形）のイメージ。
+   的より後に描くことで、壁の裏にいる間は本当に見えなくなる。 */
+/* 壁は的と同じ奥行きに置く。手前にずらすと遠近法で
+   「見えなくなる位置」と「当たらなくなる位置」がズレるため。 */
+const WALL = { side:10.5, top:5.6, z: S => -S.dist };
+const DOOR_H = s => (s > 0 ? 3.05 : 2.70);          // 右=Aメインは高く、左=サイト入口は低く
+const strafeEdge = S => S.strafeSpan + S.doorW + 2.6;
+
+/* 開口部の輪郭。(内側の足元) → 上辺 → (外側の足元) の順に返す。
+   右は半円アーチ（A メイン）、左は角形のまぐさ（A サイト入口）。 */
+function doorOutline(s, S, z){
+  const inner = s*S.strafeSpan, outer = s*(S.strafeSpan + S.doorW), h = DOOR_H(s);
+  const p = [{x:inner, y:0, z}];
+  if(s > 0){
+    const cx = s*(S.strafeSpan + S.doorW/2), r = S.doorW/2, spring = h - r;
+    p.push({x:inner, y:spring, z});
+    for(let i=1;i<=12;i++){
+      const th = Math.PI*(i/12);
+      p.push({ x: cx - s*r*Math.cos(th), y: spring + r*Math.sin(th), z });
+    }
+  }else{
+    p.push({x:inner, y:h, z}, {x:outer, y:h, z});
+  }
+  p.push({x:outer, y:0, z});
+  return p;
+}
+
+function drawStrafeWalls(S){
+  const z = WALL.z(S);
+  const stone = '#161F26', edge = '#2C3A44', jamb = '#C7621F';
+
+  for(const s of [1, -1]){
+    const inner = s*S.strafeSpan, outer = s*(S.strafeSpan + S.doorW), far = s*WALL.side;
+    const hole = doorOutline(s, S, z);
+
+    // 壁＝開口部の外側。開口部の輪郭をなぞって穴をあける。
+    const pts = [{x:outer,y:0,z}, {x:far,y:0,z}, {x:far,y:WALL.top,z}, {x:inner,y:WALL.top,z}];
+    for(let i=1; i<hole.length-1; i++) pts.push(hole[i]);
+    fillPoly3D(pts, stone, edge, 1.2);
+
+    // 開口部のふちを光らせて出入り口だと分かるようにする
+    ctx.globalAlpha = 0.55;
+    for(let i=0; i<hole.length-1; i++) seg3D(hole[i], hole[i+1], jamb, 1);
+    ctx.globalAlpha = 1;
+
+    // 石積みの目地
+    for(let y=1.1; y<WALL.top; y+=1.15)
+      seg3D({x:outer,y,z},{x:far,y,z}, edge, 0.45);
+  }
+}
 
 /* ── 追加例（コメントを外せばそのまま動きます） ──
 defineTask({
@@ -790,7 +846,7 @@ const DEFAULTS = {
   sv:2,                                  // 設定の世代。上げると duration が既定に戻る
   duration:30, concurrent:3, cols:4, rows:3, targetSize:1.5, dist:8.5, alphaHit:true,
   deathTime:0.4,
-  sideSwap:4, strafeSpan:5, strafeSpeed:'both',
+  sideSwap:4, strafeSpan:4, strafeSpeed:'both', doorW:1.7,
   volume:0.45, showRoom:true, hitmarker:true, popups:true, rim:true, rimW:2,
   ch:{ colorIdx:5, custom:'#00FFFF',
        outline:true, outlineT:1, outlineA:0.5,
@@ -809,7 +865,7 @@ const RANGES = {
   sens:[0.01,10], dpi:[100,32000], rawMul:[0.1,5], swivelRange:[5,120],
   countdown:[0,10], duration:[10,600], concurrent:[1,8], cols:[2,8], rows:[1,8],
   targetSize:[0.3,3], dist:[4,40], deathTime:[0.05,3], volume:[0,1], rimW:[0,8],
-  sideSwap:[1,20], strafeSpan:[2,12]
+  sideSwap:[1,20], strafeSpan:[2,12], doorW:[0.6,4]
 };
 function sanitize(o){
   for(const k in RANGES){
@@ -964,6 +1020,30 @@ function seg3D(a,b,color,alpha){
   ctx.globalAlpha = alpha; ctx.strokeStyle=color;
   ctx.beginPath(); ctx.moveTo(p.x,p.y); ctx.lineTo(q.x,q.y); ctx.stroke();
   ctx.globalAlpha = 1;
+}
+
+/* 同一平面上の点列を塗る。ニアクリップ付き。
+   的より後に描けば「壁の裏に隠れる」表現になる。 */
+function fillPoly3D(pts, fill, stroke, lw){
+  const NEAR = -0.08;
+  const cam3 = pts.map(toCam);
+  const clipped = [];
+  for(let i=0;i<cam3.length;i++){
+    const A = cam3[i], B = cam3[(i+1)%cam3.length];
+    const Ain = A.z <= NEAR, Bin = B.z <= NEAR;
+    if(Ain) clipped.push(A);
+    if(Ain !== Bin){
+      const t = (NEAR - A.z)/(B.z - A.z);
+      clipped.push({ x:A.x+(B.x-A.x)*t, y:A.y+(B.y-A.y)*t, z:NEAR });
+    }
+  }
+  if(clipped.length < 3) return;
+  const s = clipped.map(project);
+  ctx.beginPath(); ctx.moveTo(s[0].x, s[0].y);
+  for(let i=1;i<s.length;i++) ctx.lineTo(s[i].x, s[i].y);
+  ctx.closePath();
+  if(fill){ ctx.fillStyle = fill; ctx.fill(); }
+  if(stroke){ ctx.strokeStyle = stroke; ctx.lineWidth = lw||1.5; ctx.stroke(); }
 }
 
 function drawRoom(){
@@ -1202,6 +1282,11 @@ function shoot(){
       const py = clamp((v*sp.h)|0, 0, sp.h-1);
       if(sp.alpha[py*sp.w+px] < 90) continue;   // 背景（透明部分）は当たらない
     }
+    if(task.canHitAt){
+      // 弾が当たった点のワールド座標。壁に隠れている部分は撃ち抜けない
+      const wide = targetHeight()*sp.hScale*sp.aspect;
+      if(!task.canHitAt(t, t.x + (u-0.5)*wide, S)) continue;
+    }
     if(!best || p.d < best.p.d) best = {t, p, sh, sw};
   }
 
@@ -1255,6 +1340,7 @@ function frame(now){
       if(G.elapsed >= S.duration){ G.elapsed=S.duration; updateHud(); endRun(); }
     }
     drawTargets(now);
+    if(task.drawOverlay) task.drawOverlay(S);   // 的を隠す壁は的より後に描く
     drawFx(now);
     const [ax, ay] = aimPt();
     drawCrosshair(ctx, ax, ay, S.ch, DPR);
