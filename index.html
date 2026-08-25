@@ -717,7 +717,7 @@ const DEG = Math.PI/180, clamp=(v,a,b)=>v<a?a:v>b?b:v;
 /* ビルド識別子 — build_sprites.py が更新します。
    画面右上に出るので「今どの版を見ているか」がすぐ分かります。 */
 /* BUILD_BEGIN */
-const BUILD = '0825-1602';
+const BUILD = '0825-1606';
 /* BUILD_END */
 
 /* 撃破ボイス。src/voice/<キャラ番号>-*.mp3 を build_sprites.py が埋め込みます。
@@ -933,45 +933,75 @@ function drawSideArrow(S, now){
   ctx.restore();
 }
 
-defineTask({
-  id:'longstrafe', name:'Long Strafes', jp:'ミッドレンジ追従', category:'TRACKING', glyph:'trk',
-  tracking:true,                                  // 撃つのではなく追従時間で採点
-  widthMul:1,                                     // 元画像どおりの幅
-  desc:'追い続けるエイムを鍛えるタスク。中距離を左右に走り回る的に、'
-     + 'クロスヘアを乗せ続ける。乗っている時間 0.1 秒ごとに 100 点。',
-  duration:60, fixedConcurrent:1,
+/* ── Long Strafes ──
+   難易度違いは設定を別々に持たず、共通の設定に係数を掛けて導く。
+   こうしておくと「距離」を1つ動かせば全難易度が同じ比率でついてくる。 */
+function lsCfg(S){
+  const e = task.ease || {};
+  return {
+    dist:  S.lsDist  * (e.dist  || 1),
+    span:  S.lsSpan  * (e.span  || 1),
+    speed: S.lsSpeed * (e.speed || 1),
+    flip:  S.lsFlip  * (e.flip  || 1)
+  };
+}
 
-  center(S){ return { x:0, y:EYE, z:-S.lsDist }; },
+function defineLongStrafes(def){
+  defineTask(Object.assign({
+    category:'TRACKING', glyph:'trk',
+    tracking:true,                                // 撃つのではなく追従時間で採点
+    widthMul:1,                                   // 元画像どおりの幅
+    duration:60, fixedConcurrent:1,
 
-  spawn(G,S){
-    const v = VAL_SPEED.run * S.lsSpeed;
-    return newTarget({
-      x:0, y:EYE, z:-S.lsDist,
-      vx: Math.random()<0.5 ? v : -v,
-      flipAt: 0
-    });
-  },
+    center(S){ return { x:0, y:EYE, z:-lsCfg(S).dist }; },
 
-  update(G, dt, now, S){
-    const t = G.targets[0];
-    if(!t) return;
-    t.x += t.vx*dt;
-    // 端で折り返す。加えて時々きまぐれに切り返して、読まれないようにする。
-    if(Math.abs(t.x) >= S.lsSpan){
-      t.x = Math.sign(t.x)*S.lsSpan;
-      t.vx = -t.vx;
-      t.flipAt = G.elapsed + 0.35;
-    }else if(G.elapsed > t.flipAt && Math.random() < dt/S.lsFlip){
-      t.vx = -t.vx;
-      t.flipAt = G.elapsed + 0.35;               // 連続で切り返さない
+    spawn(G,S){
+      const c = lsCfg(S), v = VAL_SPEED.run * c.speed;
+      return newTarget({
+        x:0, y:EYE, z:-c.dist,
+        vx: Math.random()<0.5 ? v : -v,
+        flipAt: 0
+      });
+    },
+
+    update(G, dt, now, S){
+      const t = G.targets[0];
+      if(!t) return;
+      const c = lsCfg(S);
+      t.x += t.vx*dt;
+      // 端で折り返す。加えて時々きまぐれに切り返して、読まれないようにする。
+      if(Math.abs(t.x) >= c.span){
+        t.x = Math.sign(t.x)*c.span;
+        t.vx = -t.vx;
+        t.flipAt = G.elapsed + 0.35;
+      }else if(G.elapsed > t.flipAt && Math.random() < dt/c.flip){
+        t.vx = -t.vx;
+        t.flipAt = G.elapsed + 0.35;             // 連続で切り返さない
+      }
+    },
+
+    // 追い切れなかったときに的がどこへ行ったか分かるよう、走る帯を薄く敷く
+    drawDecor(S){
+      const c = lsCfg(S), z = -c.dist;
+      seg3D({x:-c.span,y:0,z},{x:c.span,y:0,z}, THEME.floor, 0.5);
     }
-  },
+  }, def));
+}
 
-  // 追い切れなかったときに的がどこへ行ったか分かるよう、走る帯を薄く敷く
-  drawDecor(S){
-    const z = -S.lsDist;
-    seg3D({x:-S.lsSpan,y:0,z},{x:S.lsSpan,y:0,z}, THEME.floor, 0.5);
-  }
+defineLongStrafes({
+  id:'longstrafe-easy', name:'Long Strafes Easy', jp:'追従・イージー',
+  accGoal:92,
+  ease:{ dist:0.72, span:0.82, speed:0.50, flip:2.0 },
+  sizeMul:1.3,                                   // 的も一回り大きく
+  desc:'Long Strafes の練習用。的が近く・大きく・ゆっくりで、切り返しも控えめ。'
+     + '追い方の形をつくってから本番へ。'
+});
+
+defineLongStrafes({
+  id:'longstrafe', name:'Long Strafes', jp:'ミッドレンジ追従',
+  accGoal:85,
+  desc:'追い続けるエイムを鍛えるタスク。中距離を左右に走り回る的に、'
+     + 'クロスヘアを乗せ続ける。乗っている時間 0.1 秒ごとに 100 点。'
 });
 
 /* ── 追加例（コメントを外せばそのまま動きます） ──
