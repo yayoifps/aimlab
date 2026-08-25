@@ -606,12 +606,23 @@ button{cursor:pointer;}
       <label class="ctl"><span>出入り口の幅<small>メートル／狭いほど顔を出す時間が短い</small></span>
         <input type="range" data-bind="doorW" min="0.6" max="4" step="0.1">
         <input type="number" class="num" data-bind="doorW" min="0.6" max="4" step="0.1"></label>
-      <label class="ctl wide"><span>移動速度<small>VALORANT の走り 6.75 m/s ・ 歩き 3.4 m/s</small></span>
+      <label class="ctl"><span>距離<small>メートル／壁までの奥行き</small></span>
+        <input type="range" data-bind="strafeDist" min="6" max="30" step="0.5">
+        <input type="number" class="num" data-bind="strafeDist" min="6" max="30" step="0.5"></label>
+      <label class="ctl wide"><span>移動の種類</span>
         <select data-bind="strafeSpeed">
-          <option value="both">両方をランダム</option>
-          <option value="run">走りのみ（6.75 m/s）</option>
-          <option value="walk">歩きのみ（3.4 m/s）</option>
+          <option value="both">走りと歩きをランダム</option>
+          <option value="run">走りのみ</option>
+          <option value="walk">歩きのみ</option>
         </select></label>
+      <label class="ctl"><span>速度倍率<small>1.00 で VALORANT と同じ速さ</small></span>
+        <input type="range" data-bind="speedMul" min="0.15" max="1.5" step="0.05">
+        <input type="number" class="num" data-bind="speedMul" min="0.15" max="1.5" step="0.05"></label>
+      <dl class="readout">
+        <div><dt>走り</dt><dd id="roRun">—</dd></div>
+        <div><dt>歩き</dt><dd id="roWalk">—</dd></div>
+        <div><dt>横切る時間</dt><dd id="roCross">—</dd></div>
+      </dl>
 
       <div class="sect">Audio</div>
       <label class="ctl"><span>音量</span><input type="range" data-bind="volume" min="0" max="1" step="0.05"><input type="number" class="num" data-bind="volume" min="0" max="1" step="0.05"></label>
@@ -659,7 +670,7 @@ const DEG = Math.PI/180, clamp=(v,a,b)=>v<a?a:v>b?b:v;
 /* ビルド識別子 — build_sprites.py が更新します。
    画面右上に出るので「今どの版を見ているか」がすぐ分かります。 */
 /* BUILD_BEGIN */
-const BUILD = '0825-1128';
+const BUILD = '0825-1136';
 /* BUILD_END */
 
 /* SPRITES_BEGIN */
@@ -731,7 +742,7 @@ defineTask({
      + '倒すか、倒しそこねて反対側の壁に入った時点で次が出る。',
   duration:30, fixedConcurrent:1,
 
-  center(S){ return { x:0, y:EYE, z:-S.dist }; },
+  center(S){ return { x:0, y:EYE, z:-S.strafeDist }; },
 
   spawn(G,S){
     const edge = strafeEdge(S);                   // 壁の裏（見えない位置）から歩き出す
@@ -740,9 +751,9 @@ defineTask({
     const useRun = S.strafeSpeed==='run'  ? true
                  : S.strafeSpeed==='walk' ? false
                  : Math.random() < 0.5;
-    const v = useRun ? VAL_SPEED.run : VAL_SPEED.walk;
+    const v = strafeSpeedOf(useRun, S);
     return newTarget({
-      x: fromRight ? edge : -edge, y: EYE, z: -S.dist,
+      x: fromRight ? edge : -edge, y: EYE, z: -S.strafeDist,
       vx: fromRight ? -v : v,
       edge, run: useRun
     });
@@ -777,9 +788,11 @@ defineTask({
    的より後に描くことで、壁の裏にいる間は本当に見えなくなる。 */
 /* 壁は的と同じ奥行きに置く。手前にずらすと遠近法で
    「見えなくなる位置」と「当たらなくなる位置」がズレるため。 */
-const WALL = { side:10.5, top:5.6, z: S => -S.dist };
+const WALL = { side:9, top:11, near:1.0, z: S => -S.strafeDist };
 const DOOR_H = s => (s > 0 ? 3.05 : 2.70);          // 右=Aメインは高く、左=サイト入口は低く
 const strafeEdge = S => S.strafeSpan + S.doorW + 2.6;
+// VALORANT の実速度に倍率をかけたもの。1.0 で本家と同じ。
+const strafeSpeedOf = (run, S) => (run ? VAL_SPEED.run : VAL_SPEED.walk) * S.speedMul;
 
 /* 開口部の輪郭。(内側の足元) → 上辺 → (外側の足元) の順に返す。
    右は半円アーチ（A メイン）、左は角形のまぐさ（A サイト入口）。 */
@@ -802,25 +815,36 @@ function doorOutline(s, S, z){
 
 function drawStrafeWalls(S){
   const z = WALL.z(S);
-  const stone = '#161F26', edge = '#2C3A44', jamb = '#C7621F';
+  const stone = '#161F26', flank = '#0F161C', edge = '#2C3A44', jamb = '#C7621F';
 
   for(const s of [1, -1]){
     const inner = s*S.strafeSpan, outer = s*(S.strafeSpan + S.doorW), far = s*WALL.side;
-    const hole = doorOutline(s, S, z);
 
-    // 壁＝開口部の外側。開口部の輪郭をなぞって穴をあける。
+    // 手前へ折り返す側壁。これが無いと壁板が途中で切れて
+    // 「置いてあるゲート」に見えてしまう。
+    fillPoly3D([
+      {x:far, y:0,         z},
+      {x:far, y:0,         z:WALL.near},
+      {x:far, y:WALL.top,  z:WALL.near},
+      {x:far, y:WALL.top,  z}
+    ], flank, edge, 1);
+    for(let y=1.15; y<WALL.top; y+=1.15)
+      seg3D({x:far,y,z},{x:far,y,z:WALL.near}, edge, 0.35);
+
+    // 奥の壁＝開口部の外側。開口部の輪郭をなぞって穴をあける。
+    const hole = doorOutline(s, S, z);
     const pts = [{x:outer,y:0,z}, {x:far,y:0,z}, {x:far,y:WALL.top,z}, {x:inner,y:WALL.top,z}];
     for(let i=1; i<hole.length-1; i++) pts.push(hole[i]);
     fillPoly3D(pts, stone, edge, 1.2);
+
+    // 石積みの目地
+    for(let y=1.15; y<WALL.top; y+=1.15)
+      seg3D({x:outer,y,z},{x:far,y,z}, edge, 0.45);
 
     // 開口部のふちを光らせて出入り口だと分かるようにする
     ctx.globalAlpha = 0.55;
     for(let i=0; i<hole.length-1; i++) seg3D(hole[i], hole[i+1], jamb, 1);
     ctx.globalAlpha = 1;
-
-    // 石積みの目地
-    for(let y=1.1; y<WALL.top; y+=1.15)
-      seg3D({x:outer,y,z},{x:far,y,z}, edge, 0.45);
   }
 }
 
@@ -846,7 +870,8 @@ const DEFAULTS = {
   sv:2,                                  // 設定の世代。上げると duration が既定に戻る
   duration:30, concurrent:3, cols:4, rows:3, targetSize:1.5, dist:8.5, alphaHit:true,
   deathTime:0.4,
-  sideSwap:4, strafeSpan:4, strafeSpeed:'both', doorW:1.7,
+  sideSwap:4, strafeSpan:5, strafeSpeed:'both', doorW:1.7,
+  strafeDist:12, speedMul:0.65,
   volume:0.45, showRoom:true, hitmarker:true, popups:true, rim:true, rimW:2,
   ch:{ colorIdx:5, custom:'#00FFFF',
        outline:true, outlineT:1, outlineA:0.5,
@@ -865,7 +890,8 @@ const RANGES = {
   sens:[0.01,10], dpi:[100,32000], rawMul:[0.1,5], swivelRange:[5,120],
   countdown:[0,10], duration:[10,600], concurrent:[1,8], cols:[2,8], rows:[1,8],
   targetSize:[0.3,3], dist:[4,40], deathTime:[0.05,3], volume:[0,1], rimW:[0,8],
-  sideSwap:[1,20], strafeSpan:[2,12], doorW:[0.6,4]
+  sideSwap:[1,20], strafeSpan:[2,12], doorW:[0.6,4],
+  strafeDist:[6,30], speedMul:[0.15,1.5]
 };
 function sanitize(o){
   for(const k in RANGES){
@@ -1787,6 +1813,11 @@ function refreshReadouts(){
   $('#roEdpi').textContent = Math.round(edpi);
   $('#roCm').textContent   = (inches*2.54).toFixed(1);
   $('#roDeg').textContent  = degPerCount.toFixed(4);
+
+  const run = VAL_SPEED.run*S.speedMul, walk = VAL_SPEED.walk*S.speedMul;
+  $('#roRun').textContent   = run.toFixed(2);
+  $('#roWalk').textContent  = walk.toFixed(2);
+  $('#roCross').textContent = (2*(S.strafeSpan+S.doorW)/run).toFixed(1)+'s';
   refreshFov();
 }
 function refreshFov(){
