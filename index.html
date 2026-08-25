@@ -720,7 +720,7 @@ const DEG = Math.PI/180, clamp=(v,a,b)=>v<a?a:v>b?b:v;
 /* ビルド識別子 — build_sprites.py が更新します。
    画面右上に出るので「今どの版を見ているか」がすぐ分かります。 */
 /* BUILD_BEGIN */
-const BUILD = '0825-1637';
+const BUILD = '0825-1643';
 /* BUILD_END */
 
 /* 撃破ボイス。src/voice/<キャラ番号>-*.mp3 を build_sprites.py が埋め込みます。
@@ -1666,6 +1666,7 @@ function trackTick(dt){
     G.pop.wx = hit.t.x;
     G.pop.wy = hit.t.y + targetHeight()*0.42;
     G.pop.wz = hit.t.z;
+    G.pop.off = hit.sw*0.5 + 8;        // 的の肩口に置く（体に重ねない）
     if(owed > 0){
       G.pop.value += owed*TRACK_STEP_SCORE;
       G.pop.lastAdd = now;
@@ -1694,8 +1695,9 @@ function drawTrackPop(now){
   if(c.z > -0.15) return;
   const pr = project(c);
   const pulse = Math.max(0, 1 - (now - p.lastAdd)/150);      // 加算のたび一瞬跳ねる
-  const size  = clamp(1500/pr.d, 15, 44) * (1 + pulse*0.25);
+  const size  = clamp(900/pr.d, 11, 26) * (1 + pulse*0.25);
   const txt   = p.value.toLocaleString();
+  const off   = p.off || size*0.5;
 
   ctx.save();
   ctx.globalAlpha = p.detachedAt ? Math.max(0, 1 - age/700) : 1;
@@ -1704,9 +1706,9 @@ function drawTrackPop(now){
   ctx.lineWidth = Math.max(2, size*0.16);
   ctx.strokeStyle = '#05080A';
   ctx.lineJoin = 'round';
-  ctx.strokeText(txt, pr.x + size*0.45, pr.y);
+  ctx.strokeText(txt, pr.x + off, pr.y);
   ctx.fillStyle = pulse > 0.02 ? '#FFFFFF' : '#FF8A3D';
-  ctx.fillText(txt, pr.x + size*0.45, pr.y);
+  ctx.fillText(txt, pr.x + off, pr.y);
   ctx.restore();
 }
 
