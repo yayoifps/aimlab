@@ -609,7 +609,6 @@ button{cursor:pointer;}
       <label class="ctl"><span>グリッド列</span><input type="range" data-bind="cols" min="2" max="7" step="1"><input type="number" class="num" data-bind="cols" min="2" max="8" step="1"></label>
       <label class="ctl"><span>グリッド行</span><input type="range" data-bind="rows" min="1" max="6" step="1"><input type="number" class="num" data-bind="rows" min="1" max="8" step="1"></label>
       <label class="ctl"><span>ターゲット身長<small>メートル</small></span><input type="range" data-bind="targetSize" min="0.4" max="2.2" step="0.05"><input type="number" class="num" data-bind="targetSize" min="0.3" max="3" step="0.05"></label>
-      <label class="ctl"><span>ターゲットの幅<small>1.00 で元画像どおり。小さいほど細い</small></span><input type="range" data-bind="widthMul" min="0.35" max="1.3" step="0.01"><input type="number" class="num" data-bind="widthMul" min="0.35" max="1.3" step="0.01"></label>
       <label class="ctl"><span>距離<small>メートル</small></span><input type="range" data-bind="dist" min="5" max="25" step="0.5"><input type="number" class="num" data-bind="dist" min="4" max="40" step="0.5"></label>
       <label class="ctl wide"><span>ピクセル単位の当たり判定<small>キャラの実シルエットのみ命中扱い</small></span><span class="sw"><input type="checkbox" data-bind="alphaHit"><i></i></span></label>
       <label class="ctl"><span>撃たれた的が消えるまで<small>秒／この間は撃たれポーズを表示</small></span><input type="range" data-bind="deathTime" min="0.1" max="1.5" step="0.05"><input type="number" class="num" data-bind="deathTime" min="0.05" max="3" step="0.05"></label>
@@ -621,6 +620,9 @@ button{cursor:pointer;}
       <label class="ctl"><span>壁の間隔<small>メートル／中心から左右の壁まで</small></span>
         <input type="range" data-bind="strafeSpan" min="1.5" max="12" step="0.5">
         <input type="number" class="num" data-bind="strafeSpan" min="1.5" max="12" step="0.5"></label>
+      <label class="ctl"><span>ターゲットの幅<small>Strafe のみ。1.00 で元画像どおり</small></span>
+        <input type="range" data-bind="widthMul" min="0.35" max="1.3" step="0.01">
+        <input type="number" class="num" data-bind="widthMul" min="0.35" max="1.3" step="0.01"></label>
       <label class="ctl"><span>出てくるまでの間<small>秒／倒してから次が姿を現すまで</small></span>
         <input type="range" data-bind="respawnDelay" min="0" max="2" step="0.05">
         <input type="number" class="num" data-bind="respawnDelay" min="0" max="2" step="0.05"></label>
@@ -694,7 +696,7 @@ const DEG = Math.PI/180, clamp=(v,a,b)=>v<a?a:v>b?b:v;
 /* ビルド識別子 — build_sprites.py が更新します。
    画面右上に出るので「今どの版を見ているか」がすぐ分かります。 */
 /* BUILD_BEGIN */
-const BUILD = '0825-1346';
+const BUILD = '0825-1352';
 /* BUILD_END */
 
 /* SPRITES_BEGIN */
@@ -743,6 +745,7 @@ const VAL_SPEED = { run: 6.75, walk: 3.4 };
 
 defineTask({
   id:'gridshot', name:'Gridshot', jp:'グリッドショット', category:'FLICKING', glyph:'grid',
+  widthMul:1,                                   // 元画像どおりの幅で出す
   desc:'格子状のセルにキャラクターが出現する。撃つと即座に別のセルへ再出現。'
      + '大きなフリックと素早い停止（マイクロコレクション）を鍛える、最も基本的なタスク。',
   duration:60, concurrent:3,
@@ -762,6 +765,7 @@ defineTask({
 
 defineTask({
   id:'strafe', name:'Strafe', jp:'置きエイム・左右', category:'TRACKING', glyph:'lr',
+  widthMul:null,                                // 設定「ターゲットの幅」に従う
   desc:'左右の壁の陰から的が現れ、一定速度で横切る。一定時間ごとに出てくる側が右→左と入れ替わる。'
      + '壁の裏にいる間は見えないし撃てない。'
      + '倒すか、倒しそこねて反対側の壁に入った時点で次が出る。',
@@ -1197,6 +1201,10 @@ function charId(i){
 
 function targetHeight(){ return S.targetSize * (task.sizeMul||1); }
 
+// 的の横幅の倍率。タスクが数値を持っていればそれを使い、
+// null なら設定の値に従う（＝そのタスクだけユーザーが細くできる）。
+function widthMulOf(){ return task.widthMul == null ? S.widthMul : task.widthMul; }
+
 // 的を1体作る。出現するキャラはランダム。
 function newTarget(props){
   const n = Math.max(CHARACTER_SPRITES.length, SPRITES.length, 1);
@@ -1395,7 +1403,7 @@ function shoot(){
     const sp = spriteOf(t); if(!sp) continue;
     const c = toCam(t); if(c.z > -0.2) continue;
     const p = project(c);
-    const sh = f*targetHeight()*sp.hScale/p.d, sw = sh*sp.aspect*S.widthMul;
+    const sh = f*targetHeight()*sp.hScale/p.d, sw = sh*sp.aspect*widthMulOf();
     const u = (AX - (p.x-sw/2))/sw, v = (AY - (p.y-sh/2))/sh;
     if(u<0||u>1||v<0||v>1) continue;
     if(S.alphaHit && sp.alpha){
@@ -1405,7 +1413,7 @@ function shoot(){
     }
     if(task.canHitAt){
       // 弾が当たった点のワールド座標。壁に隠れている部分は撃ち抜けない
-      const wide = targetHeight()*sp.hScale*sp.aspect*S.widthMul;
+      const wide = targetHeight()*sp.hScale*sp.aspect*widthMulOf();
       if(!task.canHitAt(t, t.x + (u-0.5)*wide, S)) continue;
     }
     if(!best || p.d < best.p.d) best = {t, p, sh, sw};
@@ -1493,14 +1501,14 @@ function drawTargets(now){
     const grow = Math.min(1,(now-t.born)/90);
     let a=1, k=1;
     const sh0 = f*targetHeight()*sp.hScale/p.d * (0.6+0.4*grow);
-    const sw0 = sh0*sp.aspect*S.widthMul;
+    const sw0 = sh0*sp.aspect*widthMulOf();
     if(t.dead){
       const ms = now - t.diedAt, life = S.deathTime*1000;
       if(ms >= life) continue;
       if(S.shatter){
-        // ひびが入って静止 → 砕けて飛ぶ、の2段構え
-        if(ms >= life*0.45){
-          if(!t.shattered){ t.shattered = true; spawnShards(sp, p.x, p.y, sw0, sh0, now); }
+        // ひびが入って静止 → 砕けて飛ぶ、の2段構え。タメは短く。
+        if(ms >= Math.min(85, life*0.35)){
+          if(!t.shattered){ t.shattered = true; spawnShards(t, sp, now); }
           continue;                       // 本体はもう描かない
         }
       }else{
@@ -1545,21 +1553,29 @@ function pieceHasPixels(sp, i, j){
   return false;
 }
 
-function spawnShards(sp, cx, cy, sw, sh, now){
+/* 破片はワールド座標で飛ばす。画面座標で飛ばすと視点を振っても
+   破片が付いてきてしまい、画面に貼り付いたように見えるため。 */
+function spawnShards(t, sp, now){
+  const worldH = targetHeight()*sp.hScale;
+  const worldW = worldH*sp.aspect*widthMulOf();
+  const tileW = worldW/SHARD_COLS, tileH = worldH/SHARD_ROWS;
   const spw = sp.w/SHARD_COLS, sph = sp.h/SHARD_ROWS;
-  const dw = sw/SHARD_COLS,    dh = sh/SHARD_ROWS;
+
   for(let i=0;i<SHARD_COLS;i++) for(let j=0;j<SHARD_ROWS;j++){
     if(!pieceHasPixels(sp, i, j)) continue;          // 透明な断片は飛ばさない
-    const ox = (i+0.5)/SHARD_COLS - 0.5, oy = (j+0.5)/SHARD_ROWS - 0.5;
+    const ox = (i+0.5)/SHARD_COLS - 0.5;             // 右がプラス
+    const oy = 0.5 - (j+0.5)/SHARD_ROWS;             // 上がプラス（画像は上から数えるので反転）
     const ang = Math.atan2(oy, ox*1.5) + (Math.random()-0.5)*0.8;
-    const spd = sh * (1.0 + Math.random()*2.1);
+    const spd = worldH * (1.6 + Math.random()*3.2);
     G.fx.push({
-      type:'shard', t:now, life: 640 + Math.random()*280,
+      type:'shard', t:now, life: 560 + Math.random()*260,
       img: sp.img, sx: i*spw, sy: j*sph, spw, sph,
-      x: cx + ox*sw, y: cy + oy*sh, w: dw*1.02, h: dh*1.02,
+      x: t.x + ox*worldW, y: t.y + oy*worldH, z: t.z,
       vx: Math.cos(ang)*spd,
-      vy: Math.sin(ang)*spd - sh*1.5,                 // いったん跳ね上がってから落ちる
-      g:  sh*11,
+      vy: Math.sin(ang)*spd + worldH*1.3,            // いったん跳ね上がってから落ちる
+      vz: (Math.random()-0.5)*worldH*1.1,            // 奥行きにも散る
+      g:  worldH*11,
+      tileW, tileH,
       rot:(Math.random()-0.5)*0.5, vr:(Math.random()-0.5)*7.5
     });
   }
@@ -1573,11 +1589,17 @@ function drawShards(now){
     const age = now - x.t;
     if(age >= x.life){ G.fx.splice(i,1); continue; }
     const s = age/1000, e = age/x.life;
+    const c = toCam({ x: x.x + x.vx*s,
+                      y: x.y + x.vy*s - 0.5*x.g*s*s,
+                      z: x.z + x.vz*s });
+    if(c.z > -0.15) continue;
+    const p = project(c);
+    const dw = f*x.tileW/p.d, dh = f*x.tileH/p.d;
     ctx.save();
     ctx.globalAlpha = e < 0.5 ? 1 : 1 - (e-0.5)/0.5;
-    ctx.translate(x.x + x.vx*s, x.y + x.vy*s + 0.5*x.g*s*s);
+    ctx.translate(p.x, p.y);
     ctx.rotate(x.rot + x.vr*s);
-    ctx.drawImage(x.img, x.sx, x.sy, x.spw, x.sph, -x.w/2, -x.h/2, x.w, x.h);
+    ctx.drawImage(x.img, x.sx, x.sy, x.spw, x.sph, -dw/2, -dh/2, dw, dh);
     ctx.restore();
   }
 }
