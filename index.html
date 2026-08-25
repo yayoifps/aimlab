@@ -670,7 +670,7 @@ const DEG = Math.PI/180, clamp=(v,a,b)=>v<a?a:v>b?b:v;
 /* ビルド識別子 — build_sprites.py が更新します。
    画面右上に出るので「今どの版を見ているか」がすぐ分かります。 */
 /* BUILD_BEGIN */
-const BUILD = '0825-1203';
+const BUILD = '0825-1249';
 /* BUILD_END */
 
 /* SPRITES_BEGIN */
@@ -824,12 +824,12 @@ function drawStrafeWalls(S){
   }
 }
 
-/* 次に的が出てくる側を示す矢印。壁の裏に隠れている間だけ出す。
-   点滅や揺れは目を引いて邪魔になるので、位置も濃さも固定。 */
+/* 的が出てくる側を示す矢印。ずっと出しっぱなしにする。
+   点いたり消えたりするとそのたびに目を引いてしまうので、
+   位置・大きさ・濃さは固定で、出てくる側が入れ替わったときだけ動く。 */
 function drawSideArrow(S, now){
   const t = G.targets.find(o => !o.dead && o.from);
   if(!t) return;
-  if(Math.abs(t.x) <= S.strafeSpan) return;                // 姿が見えたら消す
 
   const s = t.from;
   const c = toCam({ x: s*(S.strafeSpan - 0.35), y: EYE + 1.45, z: -S.strafeDist });
