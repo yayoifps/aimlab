@@ -133,6 +133,16 @@ button{cursor:pointer;}
   font-variant-numeric:tabular-nums;
 }
 .stats dd small{font-size:11px;color:var(--fg-dim);font-weight:400;margin-left:3px;}
+/* タイル右下の「目標」表示 */
+.stats div, .res .grid4 div{position:relative;}
+.goal{
+  position:absolute; right:11px; bottom:8px;
+  font-family:var(--display); font-size:10px; font-weight:600;
+  letter-spacing:.1em; color:var(--fg-faint);
+  font-variant-numeric:tabular-nums; white-space:nowrap;
+}
+.goal.met{color:var(--good);}
+.res .grid4 .goal{right:14px; bottom:11px; font-size:10.5px;}
 .launch{display:flex;align-items:center;gap:14px;flex-wrap:wrap;margin-top:auto;padding-top:6px;}
 .launch .gbtn.primary{padding:13px 34px;font-size:14px;letter-spacing:.2em;}
 .keys{display:flex;gap:16px;flex-wrap:wrap;font-size:11.5px;color:var(--fg-faint);}
@@ -424,7 +434,7 @@ button{cursor:pointer;}
           <div><dt>Duration</dt><dd id="dDur">60<small>s</small></dd></div>
           <div><dt>Targets</dt><dd id="dCon">3</dd></div>
           <div><dt>Personal Best</dt><dd id="dBest">—</dd></div>
-          <div><dt>Best Acc</dt><dd id="dBestAcc">—</dd></div>
+          <div><dt>Best Acc</dt><dd id="dBestAcc">—</dd><span class="goal" id="dAccGoal"></span></div>
         </dl>
         <div class="launch">
           <button class="gbtn primary" id="btnStart">Start</button>
@@ -468,7 +478,7 @@ button{cursor:pointer;}
       </div>
     </div>
     <dl class="grid4">
-      <div><dt>Accuracy</dt><dd id="rAcc">0%</dd></div>
+      <div><dt>Accuracy</dt><dd id="rAcc">0%</dd><span class="goal" id="rAccGoal"></span></div>
       <div><dt>Kills</dt><dd id="rHits">0</dd></div>
       <div><dt>KPS</dt><dd id="rKps">0.00</dd></div>
       <div><dt>Avg TTK</dt><dd id="rTtk">—</dd></div>
@@ -592,6 +602,7 @@ button{cursor:pointer;}
       <label class="ctl"><span>グリッド列</span><input type="range" data-bind="cols" min="2" max="7" step="1"><input type="number" class="num" data-bind="cols" min="2" max="8" step="1"></label>
       <label class="ctl"><span>グリッド行</span><input type="range" data-bind="rows" min="1" max="6" step="1"><input type="number" class="num" data-bind="rows" min="1" max="8" step="1"></label>
       <label class="ctl"><span>ターゲット身長<small>メートル</small></span><input type="range" data-bind="targetSize" min="0.4" max="2.2" step="0.05"><input type="number" class="num" data-bind="targetSize" min="0.3" max="3" step="0.05"></label>
+      <label class="ctl"><span>ターゲットの幅<small>1.00 で元画像どおり。小さいほど細い</small></span><input type="range" data-bind="widthMul" min="0.35" max="1.3" step="0.01"><input type="number" class="num" data-bind="widthMul" min="0.35" max="1.3" step="0.01"></label>
       <label class="ctl"><span>距離<small>メートル</small></span><input type="range" data-bind="dist" min="5" max="25" step="0.5"><input type="number" class="num" data-bind="dist" min="4" max="40" step="0.5"></label>
       <label class="ctl wide"><span>ピクセル単位の当たり判定<small>キャラの実シルエットのみ命中扱い</small></span><span class="sw"><input type="checkbox" data-bind="alphaHit"><i></i></span></label>
       <label class="ctl"><span>撃たれた的が消えるまで<small>秒／この間は撃たれポーズを表示</small></span><input type="range" data-bind="deathTime" min="0.1" max="1.5" step="0.05"><input type="number" class="num" data-bind="deathTime" min="0.05" max="3" step="0.05"></label>
@@ -670,7 +681,7 @@ const DEG = Math.PI/180, clamp=(v,a,b)=>v<a?a:v>b?b:v;
 /* ビルド識別子 — build_sprites.py が更新します。
    画面右上に出るので「今どの版を見ているか」がすぐ分かります。 */
 /* BUILD_BEGIN */
-const BUILD = '0825-1249';
+const BUILD = '0825-1303';
 /* BUILD_END */
 
 /* SPRITES_BEGIN */
@@ -703,6 +714,7 @@ const TASKS = [];
 function defineTask(def){
   TASKS.push(Object.assign({
     category:'CUSTOM', duration:60, concurrent:3, glyph:'grid',
+    accGoal:97,         // 目標とする命中率(%)
     scoreOnHit:()=>100,
     layout:null,        // セル方式の出現位置を返す
     spawn:null,         // 独自の出現処理（返した的が追加される）
@@ -883,7 +895,7 @@ const DEFAULTS = {
   duration:30, concurrent:3, cols:4, rows:3, targetSize:1.5, dist:8.5, alphaHit:true,
   deathTime:0.4,
   sideSwap:4, strafeSpan:3.5, strafeSpeed:'both',
-  strafeDist:12, speedMul:0.65, respawnDelay:0.3,
+  strafeDist:12, speedMul:0.65, respawnDelay:0.4, widthMul:0.78,
   volume:0.45, showRoom:true, hitmarker:true, popups:true, rim:true, rimW:2,
   ch:{ colorIdx:5, custom:'#00FFFF',
        outline:true, outlineT:1, outlineA:0.5,
@@ -901,7 +913,8 @@ const VFOV = 2*Math.atan(Math.tan(103*DEG/2)*9/16);  // = 70.53° / VALORANT 相
 const RANGES = {
   sens:[0.01,10], dpi:[100,32000], rawMul:[0.1,5], swivelRange:[5,120],
   countdown:[0,10], duration:[10,600], concurrent:[1,8], cols:[2,8], rows:[1,8],
-  targetSize:[0.3,3], dist:[4,40], deathTime:[0.05,3], volume:[0,1], rimW:[0,8],
+  targetSize:[0.3,3], widthMul:[0.35,1.3], dist:[4,40], deathTime:[0.05,3],
+  volume:[0,1], rimW:[0,8],
   sideSwap:[1,20], strafeSpan:[1.5,12], respawnDelay:[0,2],
   strafeDist:[6,30], speedMul:[0.15,1.5]
 };
@@ -1218,6 +1231,7 @@ function endRun(){
   $('#rDur').textContent  = S.duration+'s';
   $('#rScore').textContent= G.score.toLocaleString();
   $('#rAcc').textContent  = acc.toFixed(1)+'%';
+  setGoal($('#rAccGoal'), G.shots ? acc : null);
   $('#rHits').textContent = G.hits;
   $('#rKps').textContent  = kps.toFixed(2);
   $('#rTtk').textContent  = ttk ? Math.round(ttk)+' ms' : '—';
@@ -1240,6 +1254,15 @@ function endRun(){
   renderTally(prev);
   $('#results').classList.remove('hidden');
   renderTaskList();
+}
+
+// タイル右下に「目標 97%」を出す。達成していれば緑にする。
+function setGoal(el, value){
+  if(!el) return;
+  const g = task.accGoal;
+  if(!g){ el.textContent = ''; return; }
+  el.textContent = '目標 ' + g + '%';
+  el.classList.toggle('met', typeof value === 'number' && value >= g);
 }
 
 // キャラ別の撃破数（prev があれば前回の数値も併記）
@@ -1312,7 +1335,7 @@ function shoot(){
     const sp = spriteOf(t); if(!sp) continue;
     const c = toCam(t); if(c.z > -0.2) continue;
     const p = project(c);
-    const sh = f*targetHeight()/p.d, sw = sh*sp.aspect;
+    const sh = f*targetHeight()*sp.hScale/p.d, sw = sh*sp.aspect*S.widthMul;
     const u = (AX - (p.x-sw/2))/sw, v = (AY - (p.y-sh/2))/sh;
     if(u<0||u>1||v<0||v>1) continue;
     if(S.alphaHit && sp.alpha){
@@ -1322,7 +1345,7 @@ function shoot(){
     }
     if(task.canHitAt){
       // 弾が当たった点のワールド座標。壁に隠れている部分は撃ち抜けない
-      const wide = targetHeight()*sp.hScale*sp.aspect;
+      const wide = targetHeight()*sp.hScale*sp.aspect*S.widthMul;
       if(!task.canHitAt(t, t.x + (u-0.5)*wide, S)) continue;
     }
     if(!best || p.d < best.p.d) best = {t, p, sh, sw};
@@ -1413,7 +1436,7 @@ function drawTargets(now){
       else { a = 1-e; k = 1+e*0.35; }
     }
     const sh = f*targetHeight()*sp.hScale/p.d * (0.6+0.4*grow) * k;
-    const sw = sh*sp.aspect;
+    const sw = sh*sp.aspect*S.widthMul;
     const alpha = a * (0.4+0.6*grow);
     if(S.rim && S.rimW>0 && sp.sil){
       ctx.globalAlpha = alpha*0.5;
@@ -1787,6 +1810,7 @@ function renderDetail(){
   const rec = BEST[task.id];
   $('#dBest').textContent = rec?.score ? rec.score.toLocaleString() : '—';
   $('#dBestAcc').textContent = rec?.acc ? rec.acc.toFixed(1)+'%' : '—';
+  setGoal($('#dAccGoal'), rec?.acc);
 }
 
 /* ── 汎用バインダ ── */
