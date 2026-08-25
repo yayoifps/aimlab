@@ -703,7 +703,7 @@ const DEG = Math.PI/180, clamp=(v,a,b)=>v<a?a:v>b?b:v;
 /* ビルド識別子 — build_sprites.py が更新します。
    画面右上に出るので「今どの版を見ているか」がすぐ分かります。 */
 /* BUILD_BEGIN */
-const BUILD = '0825-1506';
+const BUILD = '0825-1509';
 /* BUILD_END */
 
 /* 撃破ボイス。src/voice/<キャラ番号>-*.mp3 を build_sprites.py が埋め込みます。
@@ -790,8 +790,7 @@ defineTask({
   id:'strafe', name:'Ohki Aim', jp:'左右から出現', category:'TRACKING', glyph:'lr',
   widthMul:null,                                // 設定「ターゲットの幅」に従う
   desc:'待ちのエイムを鍛えるタスク。的が出てくる角にあらかじめ照準を置き、'
-     + '姿が見えた瞬間に撃つ。見えてから動かしていては間に合わない。'
-     + '矢印が出ている側の壁から現れる。',
+     + '姿が見えた瞬間に撃つ。矢印が出ている側の壁から現れる。',
   duration:30, fixedConcurrent:1,
 
   center(S){ return { x:0, y:EYE, z:-S.strafeDist }; },
