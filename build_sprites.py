@@ -12,6 +12,11 @@ aimlab/src/ に透過 PNG を置きます。
     names.json  リザルト画面に出す表示名（任意）
                 { "01": "izumii", "02": "kun" }
 
+    voice/      撃破時に鳴る音声（任意）。ファイル名の先頭「-」までがキャラ番号。
+                同じ番号が複数あれば、倒すたびにランダムで選ばれます。
+                  voice/01-1.mp3  voice/01-2.mp3
+                  voice/02-1.mp3  voice/02-2.mp3
+
 ・アルファのバウンディングボックスでトリミング
 ・立ちポーズの高さを MAX_H に揃え、撃たれポーズには「同じ倍率」を掛ける
   （元画像のスケールが共通なので、これで体の大きさが揃います）
@@ -132,6 +137,40 @@ def main():
     )
     if n != 1:
         sys.exit("index.html に SPRITES_BEGIN / SPRITES_END マーカーが見つかりません")
+
+    # 撃破ボイス。ファイル名の先頭「-」までをキャラ番号として束ねる。
+    voice_dir = os.path.join(SRC, "voice")
+    voices, vbytes = {}, 0
+    if os.path.isdir(voice_dir):
+        for f in sorted(os.listdir(voice_dir)):
+            if not f.lower().endswith((".mp3", ".ogg", ".wav", ".m4a")):
+                continue
+            key = os.path.splitext(f)[0].split("-")[0]
+            with open(os.path.join(voice_dir, f), "rb") as fh:
+                raw = fh.read()
+            voices.setdefault(key, []).append(base64.b64encode(raw).decode("ascii"))
+            vbytes += len(raw)
+            print("voice %-12s -> %-4s %6.1f KB" % (f, key, len(raw) / 1024))
+
+    vbody = "const CHARACTER_VOICES = {\n"
+    for key in sorted(voices):
+        vbody += "  %s: [\n" % json_str(key)
+        for b in voices[key]:
+            vbody += "    '%s',\n" % b
+        vbody += "  ],\n"
+    vbody += "};\n"
+
+    new, nv = re.subn(
+        r"(/\* VOICES_BEGIN \*/\n).*?(/\* VOICES_END \*/)",
+        lambda m: m.group(1) + vbody + m.group(2),
+        new,
+        flags=re.S,
+    )
+    if nv != 1:
+        sys.exit("index.html に VOICES_BEGIN / VOICES_END マーカーが見つかりません")
+    if voices:
+        print("-> 撃破ボイス %d 種 / %d 本（%.1f KB）"
+              % (len(voices), sum(len(v) for v in voices.values()), vbytes / 1024))
 
     # ビルド識別子（画面に出るので、キャッシュで古い版を見ていないか確認できる）
     import datetime
