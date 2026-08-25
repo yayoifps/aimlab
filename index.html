@@ -600,12 +600,9 @@ button{cursor:pointer;}
       <label class="ctl"><span>左右の切替<small>秒／この間隔で出てくる側が入れ替わる</small></span>
         <input type="range" data-bind="sideSwap" min="1" max="20" step="0.5">
         <input type="number" class="num" data-bind="sideSwap" min="1" max="20" step="0.5"></label>
-      <label class="ctl"><span>開けた区間の幅<small>メートル／中心から左右の壁まで</small></span>
+      <label class="ctl"><span>壁の間隔<small>メートル／中心から左右の壁まで</small></span>
         <input type="range" data-bind="strafeSpan" min="2" max="12" step="0.5">
         <input type="number" class="num" data-bind="strafeSpan" min="2" max="12" step="0.5"></label>
-      <label class="ctl"><span>出入り口の幅<small>メートル／狭いほど顔を出す時間が短い</small></span>
-        <input type="range" data-bind="doorW" min="0.6" max="4" step="0.1">
-        <input type="number" class="num" data-bind="doorW" min="0.6" max="4" step="0.1"></label>
       <label class="ctl"><span>距離<small>メートル／壁までの奥行き</small></span>
         <input type="range" data-bind="strafeDist" min="6" max="30" step="0.5">
         <input type="number" class="num" data-bind="strafeDist" min="6" max="30" step="0.5"></label>
@@ -670,7 +667,7 @@ const DEG = Math.PI/180, clamp=(v,a,b)=>v<a?a:v>b?b:v;
 /* ビルド識別子 — build_sprites.py が更新します。
    画面右上に出るので「今どの版を見ているか」がすぐ分かります。 */
 /* BUILD_BEGIN */
-const BUILD = '0825-1141';
+const BUILD = '0825-1144';
 /* BUILD_END */
 
 /* SPRITES_BEGIN */
@@ -737,8 +734,8 @@ defineTask({
 
 defineTask({
   id:'strafe', name:'Strafe', jp:'置きエイム・左右', category:'TRACKING', glyph:'lr',
-  desc:'的が壁の外から一定速度で横切る。一定時間ごとに出てくる側が右→左と入れ替わる。'
-     + '速度は VALORANT の走り（6.75 m/s）と歩き（3.4 m/s）。'
+  desc:'左右の壁の陰から的が現れ、一定速度で横切る。一定時間ごとに出てくる側が右→左と入れ替わる。'
+     + '壁の裏にいる間は見えないし撃てない。'
      + '倒すか、倒しそこねて反対側の壁に入った時点で次が出る。',
   duration:30, fixedConcurrent:1,
 
@@ -771,84 +768,55 @@ defineTask({
     }
   },
 
-  // 壁の外にいる的は撃てない（見えていない部分は当たり判定も無い）
-  canHitAt(t, worldX, S){ return Math.abs(worldX) <= S.strafeSpan + S.doorW; },
-
-  // 的より奥。開口部と同じ面に置くことで、穴の形とぴったり合う。
-  // 開口部の内側。壁よりはっきり暗くして「穴」だと分かるようにする。
-  drawDecor(S){
-    for(const s of [-1, 1]) fillPoly3D(doorOutline(s, S, WALL.z(S)), '#06090C');
-  },
+  // 壁の陰にいる的は撃てない（見えていない部分は当たり判定も無い）
+  canHitAt(t, worldX, S){ return Math.abs(worldX) <= S.strafeSpan; },
 
   // 的より手前。ここで壁の裏を隠す。
   drawOverlay(S){ drawStrafeWalls(S); }
 });
 
 /* ── Strafe の壁 ──
-   ASCENT の A メイン（右・アーチ）と A サイト入口（左・角形）のイメージ。
-   的より後に描くことで、壁の裏にいる間は本当に見えなくなる。 */
-/* 壁は的と同じ奥行きに置く。手前にずらすと遠近法で
+   左右に立つ無地の壁。的はこの陰から現れる。
+   壁は的と同じ奥行きに置く。手前にずらすと遠近法で
    「見えなくなる位置」と「当たらなくなる位置」がズレるため。 */
 const WALL = { side:9, top:11, near:1.0, z: S => -S.strafeDist };
-const DOOR_H = s => (s > 0 ? 3.05 : 2.70);          // 右=Aメインは高く、左=サイト入口は低く
-const strafeEdge = S => S.strafeSpan + S.doorW + 2.6;
+const strafeEdge = S => S.strafeSpan + 2.6;
 // VALORANT の実速度に倍率をかけたもの。1.0 で本家と同じ。
 const strafeSpeedOf = (run, S) => (run ? VAL_SPEED.run : VAL_SPEED.walk) * S.speedMul;
 
-/* 開口部の輪郭。(内側の足元) → 上辺 → (外側の足元) の順に返す。
-   右は半円アーチ（A メイン）、左は角形のまぐさ（A サイト入口）。 */
-function doorOutline(s, S, z, grow){
-  grow = grow || 0;
-  const inner = s*(S.strafeSpan - grow), outer = s*(S.strafeSpan + S.doorW + grow),
-        h = DOOR_H(s) + grow;
-  const p = [{x:inner, y:0, z}];
-  if(s > 0){
-    const cx = s*(S.strafeSpan + S.doorW/2), r = S.doorW/2 + grow, spring = h - r;
-    p.push({x:inner, y:spring, z});
-    for(let i=1;i<=12;i++){
-      const th = Math.PI*(i/12);
-      p.push({ x: cx - s*r*Math.cos(th), y: spring + r*Math.sin(th), z });
-    }
-  }else{
-    p.push({x:inner, y:h, z}, {x:outer, y:h, z});
-  }
-  p.push({x:outer, y:0, z});
-  return p;
-}
-
 function drawStrafeWalls(S){
   const z = WALL.z(S);
-  // 奥の壁は明るめ、手前へ折り返す側壁は暗め。面の向きの違いを色で出す。
-  const stone = '#1D2830', flank = '#131B22', edge = '#33434E', reveal = '#445765';
+  // 正面の壁は明るめ、手前へ折り返す側壁は暗め。面の向きの違いを色で出す。
+  const stone = '#1D2830', flank = '#131B22', edge = '#33434E', corner = '#4A5D6B';
 
   for(const s of [1, -1]){
-    const inner = s*S.strafeSpan, outer = s*(S.strafeSpan + S.doorW), far = s*WALL.side;
+    const inner = s*S.strafeSpan, far = s*WALL.side;
 
     // 手前へ折り返す側壁。これが無いと壁板が途中で切れて
-    // 「置いてあるゲート」に見えてしまう。
+    // 「置いてある板」に見えてしまう。
     fillPoly3D([
-      {x:far, y:0,         z},
-      {x:far, y:0,         z:WALL.near},
-      {x:far, y:WALL.top,  z:WALL.near},
-      {x:far, y:WALL.top,  z}
+      {x:far, y:0,        z},
+      {x:far, y:0,        z:WALL.near},
+      {x:far, y:WALL.top, z:WALL.near},
+      {x:far, y:WALL.top, z}
     ], flank, edge, 1);
     for(let y=1.15; y<WALL.top; y+=1.15)
       seg3D({x:far,y,z},{x:far,y,z:WALL.near}, edge, 0.35);
 
-    // 奥の壁＝開口部の外側。開口部の輪郭をなぞって穴をあける。
-    const hole = doorOutline(s, S, z);
-    const pts = [{x:outer,y:0,z}, {x:far,y:0,z}, {x:far,y:WALL.top,z}, {x:inner,y:WALL.top,z}];
-    for(let i=1; i<hole.length-1; i++) pts.push(hole[i]);
-    fillPoly3D(pts, stone, edge, 1.2);
+    // 正面の壁
+    fillPoly3D([
+      {x:inner, y:0,        z},
+      {x:far,   y:0,        z},
+      {x:far,   y:WALL.top, z},
+      {x:inner, y:WALL.top, z}
+    ], stone, edge, 1.2);
 
     // 石積みの目地
     for(let y=1.15; y<WALL.top; y+=1.15)
-      seg3D({x:outer,y,z},{x:far,y,z}, edge, 0.45);
+      seg3D({x:inner,y,z},{x:far,y,z}, edge, 0.45);
 
-    // 開口部のふち。石の角が光を拾っている程度の控えめな線にする。
-    ctx.lineJoin = 'round';
-    for(let i=0; i<hole.length-1; i++) seg3D(hole[i], hole[i+1], reveal, 0.9, 2.5);
-    ctx.lineJoin = 'miter';
+    // 的が現れてくる角。ここだけ少し明るくして境目を分かりやすくする。
+    seg3D({x:inner,y:0,z},{x:inner,y:WALL.top,z}, corner, 0.85, 2);
   }
 }
 
@@ -874,7 +842,7 @@ const DEFAULTS = {
   sv:2,                                  // 設定の世代。上げると duration が既定に戻る
   duration:30, concurrent:3, cols:4, rows:3, targetSize:1.5, dist:8.5, alphaHit:true,
   deathTime:0.4,
-  sideSwap:4, strafeSpan:5, strafeSpeed:'both', doorW:1.7,
+  sideSwap:4, strafeSpan:5, strafeSpeed:'both',
   strafeDist:12, speedMul:0.65,
   volume:0.45, showRoom:true, hitmarker:true, popups:true, rim:true, rimW:2,
   ch:{ colorIdx:5, custom:'#00FFFF',
@@ -894,7 +862,7 @@ const RANGES = {
   sens:[0.01,10], dpi:[100,32000], rawMul:[0.1,5], swivelRange:[5,120],
   countdown:[0,10], duration:[10,600], concurrent:[1,8], cols:[2,8], rows:[1,8],
   targetSize:[0.3,3], dist:[4,40], deathTime:[0.05,3], volume:[0,1], rimW:[0,8],
-  sideSwap:[1,20], strafeSpan:[2,12], doorW:[0.6,4],
+  sideSwap:[1,20], strafeSpan:[2,12],
   strafeDist:[6,30], speedMul:[0.15,1.5]
 };
 function sanitize(o){
@@ -1821,7 +1789,7 @@ function refreshReadouts(){
   const run = VAL_SPEED.run*S.speedMul, walk = VAL_SPEED.walk*S.speedMul;
   $('#roRun').textContent   = run.toFixed(2);
   $('#roWalk').textContent  = walk.toFixed(2);
-  $('#roCross').textContent = (2*(S.strafeSpan+S.doorW)/run).toFixed(1)+'s';
+  $('#roCross').textContent = (2*S.strafeSpan/run).toFixed(1)+'s';
   refreshFov();
 }
 function refreshFov(){
