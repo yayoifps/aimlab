@@ -657,6 +657,9 @@ button{cursor:pointer;}
       <label class="ctl"><span>切り返しの頻度<small>秒／小さいほど不規則に折り返す</small></span>
         <input type="range" data-bind="lsFlip" min="0.4" max="10" step="0.1">
         <input type="number" class="num" data-bind="lsFlip" min="0.4" max="10" step="0.1"></label>
+      <label class="ctl"><span>連続が切れるまで<small>秒／この時間まで外しても連続は続く</small></span>
+        <input type="range" data-bind="trackGrace" min="0" max="2" step="0.05">
+        <input type="number" class="num" data-bind="trackGrace" min="0" max="2" step="0.05"></label>
 
       <div class="sect">Audio</div>
       <label class="ctl"><span>音量</span><input type="range" data-bind="volume" min="0" max="1" step="0.05"><input type="number" class="num" data-bind="volume" min="0" max="1" step="0.05"></label>
@@ -717,7 +720,7 @@ const DEG = Math.PI/180, clamp=(v,a,b)=>v<a?a:v>b?b:v;
 /* ビルド識別子 — build_sprites.py が更新します。
    画面右上に出るので「今どの版を見ているか」がすぐ分かります。 */
 /* BUILD_BEGIN */
-const BUILD = '0825-1612';
+const BUILD = '0825-1637';
 /* BUILD_END */
 
 /* 撃破ボイス。src/voice/<キャラ番号>-*.mp3 を build_sprites.py が埋め込みます。
@@ -1028,7 +1031,7 @@ const DEFAULTS = {
   deathTime:0.4,
   sideSwap:4, strafeSpan:3.5, strafeSpeed:'both',
   strafeDist:12, speedMul:0.65, respawnDelay:0.4, widthMul:0.78,
-  lsDist:12, lsSpan:7, lsSpeed:0.62, lsFlip:2.2, sv3:2,
+  lsDist:12, lsSpan:7, lsSpeed:0.62, lsFlip:2.2, sv3:2, trackGrace:0.3,
   volume:0.5, voiceVol:0.75, voiceOn:true, sv2:2,
   showRoom:true, hitmarker:true, popups:true, rim:true, rimW:2, shatter:true,
   bgColor:'#0A1015',
@@ -1052,7 +1055,7 @@ const RANGES = {
   volume:[0,1], voiceVol:[0,1.5], rimW:[0,8],
   sideSwap:[1,20], strafeSpan:[1.5,12], respawnDelay:[0,2],
   strafeDist:[6,30], speedMul:[0.15,1.5],
-  lsDist:[8,40], lsSpan:[3,14], lsSpeed:[0.15,1.5], lsFlip:[0.4,10]
+  lsDist:[8,40], lsSpan:[3,14], lsSpeed:[0.15,1.5], lsFlip:[0.4,10], trackGrace:[0,2]
 };
 function sanitize(o){
   for(const k in RANGES){
@@ -1343,7 +1346,7 @@ const G = {
   targets:[], fx:[], cells:[],
   started:false, t0:0, elapsed:0, phase:'countdown', cdEnd:0,
   shots:0, hits:0, score:0, lastHit:0, ttks:[], killsBy:[], pointsBy:[],
-  trackMs:0, scoredSteps:0, streakMs:0, bestStreak:0, trackBy:[]
+  trackMs:0, scoredSteps:0, streakMs:0, bestStreak:0, offMs:0, trackBy:[], pop:null
 };
 const swBase = { yaw:0, pitch:0 };      // 簡易FPS視点の基準角（＝的の中心）
 const swOrigin = { x:0, y:0 };          // その基準に対応するカーソル位置
@@ -1409,7 +1412,8 @@ function resetRun(){
   G.killsBy  = new Array(nc).fill(0);
   G.pointsBy = new Array(nc).fill(0);
   G.trackBy  = new Array(nc).fill(0);
-  G.trackMs = G.scoredSteps = G.streakMs = G.bestStreak = 0;
+  G.trackMs = G.scoredSteps = G.streakMs = G.bestStreak = G.offMs = 0;
+  G.pop = null;
   aimAtGridCenter();
   const n = task.fixedConcurrent || Math.min(S.concurrent, G.cells.length);
   for(let i=0;i<n;i++) spawn();
@@ -1635,12 +1639,13 @@ function shoot(){
 const TRACK_STEP_MS = 100, TRACK_STEP_SCORE = 100;
 
 function trackTick(dt){
-  const ms = dt*1000;
+  const ms = dt*1000, now = performance.now();
   const hit = targetUnderCrosshair();
   for(const t of G.targets) t.tracked = false;
 
   if(hit){
     hit.t.tracked = true;
+    G.offMs = 0;                       // 猶予のカウントをリセット
     G.trackMs  += ms;
     G.streakMs += ms;
     if(G.streakMs > G.bestStreak) G.bestStreak = G.streakMs;
@@ -1655,9 +1660,54 @@ function trackTick(dt){
       G.score += owed*TRACK_STEP_SCORE;
       G.pointsBy[hit.t.sp] = (G.pointsBy[hit.t.sp]||0) + owed*TRACK_STEP_SCORE;
     }
+
+    // 連続中はひとつの数字が積み上がっていく（APEX のダメージ表示のように）
+    if(!G.pop || G.pop.detachedAt) G.pop = { value:0, lastAdd:0, detachedAt:0 };
+    G.pop.wx = hit.t.x;
+    G.pop.wy = hit.t.y + targetHeight()*0.42;
+    G.pop.wz = hit.t.z;
+    if(owed > 0){
+      G.pop.value += owed*TRACK_STEP_SCORE;
+      G.pop.lastAdd = now;
+    }
   }else{
-    G.streakMs = 0;
+    // すぐには切らない。少し外しても連続は続く。
+    G.offMs += ms;
+    if(G.offMs >= S.trackGrace*1000){
+      G.streakMs = 0;
+      if(G.pop && !G.pop.detachedAt){
+        if(G.pop.value > 0) G.pop.detachedAt = now;   // 数字を切り離して流す
+        else G.pop = null;
+      }
+    }
   }
+}
+
+/* 積み上がった得点の表示。連続が切れたら上へ流れて消える。 */
+function drawTrackPop(now){
+  const p = G.pop;
+  if(!p || !p.value) return;
+  const age = p.detachedAt ? now - p.detachedAt : 0;
+  if(p.detachedAt && age > 700){ G.pop = null; return; }
+
+  const c = toCam({ x:p.wx, y:p.wy + (p.detachedAt ? age/700*0.6 : 0), z:p.wz });
+  if(c.z > -0.15) return;
+  const pr = project(c);
+  const pulse = Math.max(0, 1 - (now - p.lastAdd)/150);      // 加算のたび一瞬跳ねる
+  const size  = clamp(1500/pr.d, 15, 44) * (1 + pulse*0.25);
+  const txt   = p.value.toLocaleString();
+
+  ctx.save();
+  ctx.globalAlpha = p.detachedAt ? Math.max(0, 1 - age/700) : 1;
+  ctx.font = '700 ' + size.toFixed(1) + 'px "Chakra Petch", sans-serif';
+  ctx.textAlign = 'left'; ctx.textBaseline = 'middle';
+  ctx.lineWidth = Math.max(2, size*0.16);
+  ctx.strokeStyle = '#05080A';
+  ctx.lineJoin = 'round';
+  ctx.strokeText(txt, pr.x + size*0.45, pr.y);
+  ctx.fillStyle = pulse > 0.02 ? '#FFFFFF' : '#FF8A3D';
+  ctx.fillText(txt, pr.x + size*0.45, pr.y);
+  ctx.restore();
 }
 
 /* ── ループ ── */
@@ -1696,6 +1746,7 @@ function frame(now){
     drawShards(now);
     if(task.drawOverlay) task.drawOverlay(S, now);   // 的を隠す壁は的より後に描く
     drawFx(now);
+    if(task.tracking) drawTrackPop(now);
     const [ax, ay] = aimPt();
     drawCrosshair(ctx, ax, ay, S.ch, DPR);
     if(G.phase==='countdown') drawCountdown(now);
