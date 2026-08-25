@@ -79,11 +79,12 @@ button{cursor:pointer;}
   background:var(--accent); border-color:var(--accent); color:#100A05; font-weight:700;
 }
 .gbtn.primary:hover{background:#FFA061;border-color:#FFA061;color:#100A05;}
+/* 副次操作のボタン。START と同じ塗りつぶし＋黒文字で、色だけ水色にする。 */
 .gbtn.ghost{
-  background:transparent; color:var(--ice); border-color:var(--ice-dim);
+  background:var(--ice); border-color:var(--ice); color:#06171D; font-weight:700;
 }
 .gbtn.ghost:hover{
-  background:var(--ice-glow); border-color:var(--ice); color:#C4EDF8;
+  background:#8FDCF2; border-color:#8FDCF2; color:#06171D;
 }
 .buildtag{
   font-family:var(--display);font-size:9.5px;letter-spacing:.18em;text-transform:uppercase;
@@ -687,7 +688,7 @@ const DEG = Math.PI/180, clamp=(v,a,b)=>v<a?a:v>b?b:v;
 /* ビルド識別子 — build_sprites.py が更新します。
    画面右上に出るので「今どの版を見ているか」がすぐ分かります。 */
 /* BUILD_BEGIN */
-const BUILD = '0825-1336';
+const BUILD = '0825-1337';
 /* BUILD_END */
 
 /* SPRITES_BEGIN */
