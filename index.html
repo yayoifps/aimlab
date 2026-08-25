@@ -646,7 +646,13 @@ button{cursor:pointer;}
 
       <div class="sect">Audio</div>
       <label class="ctl"><span>音量</span><input type="range" data-bind="volume" min="0" max="1" step="0.05"><input type="number" class="num" data-bind="volume" min="0" max="1" step="0.05"></label>
+      <label class="ctl wide"><span>撃破ボイス<small>キャラごとの音声を鳴らす</small></span>
+        <span class="sw"><input type="checkbox" data-bind="voiceOn"><i></i></span></label>
       <label class="ctl"><span>撃破ボイスの音量<small>射撃音との釣り合いを取るときに</small></span><input type="range" data-bind="voiceVol" min="0" max="1.5" step="0.05"><input type="number" class="num" data-bind="voiceVol" min="0" max="1.5" step="0.05"></label>
+      <dl class="readout">
+        <div><dt>射撃音</dt><dd id="roVolShot">—</dd></div>
+        <div><dt>ボイス</dt><dd id="roVolVoice">—</dd></div>
+      </dl>
     </div>
 
     <div class="pane hidden" data-pane="video">
@@ -697,7 +703,7 @@ const DEG = Math.PI/180, clamp=(v,a,b)=>v<a?a:v>b?b:v;
 /* ビルド識別子 — build_sprites.py が更新します。
    画面右上に出るので「今どの版を見ているか」がすぐ分かります。 */
 /* BUILD_BEGIN */
-const BUILD = '0825-1404';
+const BUILD = '0825-1409';
 /* BUILD_END */
 
 /* 撃破ボイス。src/voice/<キャラ番号>-*.mp3 を build_sprites.py が埋め込みます。
@@ -929,7 +935,7 @@ const DEFAULTS = {
   deathTime:0.4,
   sideSwap:4, strafeSpan:3.5, strafeSpeed:'both',
   strafeDist:12, speedMul:0.65, respawnDelay:0.4, widthMul:0.78,
-  volume:0.45, voiceVol:1.0,
+  volume:0.5, voiceVol:0.75, voiceOn:true, sv2:2,
   showRoom:true, hitmarker:true, popups:true, rim:true, rimW:2, shatter:true,
   bgColor:'#0A1015',
   ch:{ colorIdx:5, custom:'#00FFFF',
@@ -966,6 +972,10 @@ const STORED = loadJSON(STORE) || {};
 let S = sanitize(deepMerge(structuredClone(DEFAULTS), STORED));
 // 設定の世代が古ければ、制限時間だけ新しい既定値に揃える
 if(STORED.sv !== DEFAULTS.sv){ S.duration = DEFAULTS.duration; S.sv = DEFAULTS.sv; }
+// 音量カーブを入れ替えたので、保存済みの音量も一度だけ新しい既定に戻す
+if(STORED.sv2 !== DEFAULTS.sv2){
+  S.volume = DEFAULTS.volume; S.voiceVol = DEFAULTS.voiceVol; S.sv2 = DEFAULTS.sv2;
+}
 let BEST = loadJSON(STORE+':best') || {};
 let LAST = loadJSON(STORE+':last') || {};   // 直前のランの成績（タスクごと）
 
@@ -1952,15 +1962,19 @@ function decodeVoices(a){
     });
   }
 }
+/* スライダーの値をそのままゲインにすると、耳には下の方だけで
+   一気に変わって上半分がほとんど効かない。二乗して人の聞こえ方に寄せる。 */
+const vol = v => v*v;
+
 function sfxVoice(spriteIndex){
-  if(S.volume<=0 || S.voiceVol<=0) return;
+  if(!S.voiceOn || S.volume<=0 || S.voiceVol<=0) return;
   const list = (VOICE[charId(spriteIndex)] || []).filter(Boolean);
   if(!list.length) return;
   const a = ac();
   const src = a.createBufferSource();
   src.buffer = list[(Math.random()*list.length)|0];   // 複数あればランダム
   const g = a.createGain();
-  g.gain.value = S.volume * S.voiceVol;
+  g.gain.value = vol(S.volume) * vol(S.voiceVol);
   src.connect(g).connect(a.destination);
   src.start();
 }
@@ -1968,7 +1982,7 @@ function sfxShot(){
   if(S.volume<=0) return; const a=ac();
   const s=a.createBufferSource(); s.buffer=noise;
   const bp=a.createBiquadFilter(); bp.type='bandpass'; bp.frequency.value=1400; bp.Q.value=0.8;
-  const g=a.createGain(); g.gain.setValueAtTime(S.volume*0.35, a.currentTime);
+  const g=a.createGain(); g.gain.setValueAtTime(vol(S.volume)*0.35, a.currentTime);
   g.gain.exponentialRampToValueAtTime(0.0001, a.currentTime+0.09);
   s.connect(bp).connect(g).connect(a.destination); s.start();
 }
@@ -1977,7 +1991,7 @@ function sfxHit(){
   const o=a.createOscillator(), g=a.createGain();
   o.type='square'; o.frequency.setValueAtTime(1180, a.currentTime);
   o.frequency.exponentialRampToValueAtTime(760, a.currentTime+0.06);
-  g.gain.setValueAtTime(S.volume*0.18, a.currentTime);
+  g.gain.setValueAtTime(vol(S.volume)*0.18, a.currentTime);
   g.gain.exponentialRampToValueAtTime(0.0001, a.currentTime+0.08);
   o.connect(g).connect(a.destination); o.start(); o.stop(a.currentTime+0.09);
 }
@@ -2065,6 +2079,12 @@ function refreshReadouts(){
   $('#roRun').textContent   = run.toFixed(2);
   $('#roWalk').textContent  = walk.toFixed(2);
   $('#roCross').textContent = (2*S.strafeSpan/run).toFixed(1)+'s';
+
+  // 実際に出力されるゲイン（カーブ適用後）を見えるようにしておく
+  const gShot  = vol(S.volume)*0.35;
+  const gVoice = S.voiceOn ? vol(S.volume)*vol(S.voiceVol) : 0;
+  $('#roVolShot').textContent  = (gShot*100).toFixed(1)+'%';
+  $('#roVolVoice').textContent = S.voiceOn ? (gVoice*100).toFixed(1)+'%' : 'OFF';
   refreshFov();
 }
 function refreshFov(){
