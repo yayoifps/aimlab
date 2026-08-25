@@ -703,7 +703,7 @@ const DEG = Math.PI/180, clamp=(v,a,b)=>v<a?a:v>b?b:v;
 /* ビルド識別子 — build_sprites.py が更新します。
    画面右上に出るので「今どの版を見ているか」がすぐ分かります。 */
 /* BUILD_BEGIN */
-const BUILD = '0825-1502';
+const BUILD = '0825-1503';
 /* BUILD_END */
 
 /* 撃破ボイス。src/voice/<キャラ番号>-*.mp3 を build_sprites.py が埋め込みます。
@@ -787,7 +787,7 @@ defineTask({
 
 defineTask({
   // id は記録の紐付けに使っているので変えない（表示名だけ差し替える）
-  id:'strafe', name:'OhkiAim', jp:'左右から出現', category:'TRACKING', glyph:'lr',
+  id:'strafe', name:'Ohki Aim', jp:'左右から出現', category:'TRACKING', glyph:'lr',
   widthMul:null,                                // 設定「ターゲットの幅」に従う
   desc:'左右の壁の陰から的が現れ、一定速度で横切る。一定時間ごとに出てくる側が右→左と入れ替わる。'
      + '壁の裏にいる間は見えないし撃てない。'
