@@ -670,7 +670,7 @@ const DEG = Math.PI/180, clamp=(v,a,b)=>v<a?a:v>b?b:v;
 /* ビルド識別子 — build_sprites.py が更新します。
    画面右上に出るので「今どの版を見ているか」がすぐ分かります。 */
 /* BUILD_BEGIN */
-const BUILD = '0825-1153';
+const BUILD = '0825-1203';
 /* BUILD_END */
 
 /* SPRITES_BEGIN */
@@ -824,14 +824,12 @@ function drawStrafeWalls(S){
   }
 }
 
-/* 次に的が出てくる側を示す矢印。壁の裏に隠れている間だけ出て、
-   姿を現すにつれて消える。 */
+/* 次に的が出てくる側を示す矢印。壁の裏に隠れている間だけ出す。
+   点滅や揺れは目を引いて邪魔になるので、位置も濃さも固定。 */
 function drawSideArrow(S, now){
   const t = G.targets.find(o => !o.dead && o.from);
   if(!t) return;
-  const hidden = (Math.abs(t.x) - S.strafeSpan) / 0.9;      // 1=完全に裏、0=出きった
-  const a = clamp(hidden, 0, 1);
-  if(a <= 0.02) return;
+  if(Math.abs(t.x) <= S.strafeSpan) return;                // 姿が見えたら消す
 
   const s = t.from;
   const c = toCam({ x: s*(S.strafeSpan - 0.35), y: EYE + 1.45, z: -S.strafeDist });
@@ -839,12 +837,11 @@ function drawSideArrow(S, now){
   const p = project(c);
   const size = clamp(560/p.d, 13, 46);
   const dir = -s;                                          // 進行方向＝内側
-  const bob = Math.sin(now/170) * size*0.12;
-  const x = p.x + dir*bob, y = p.y;
+  const x = p.x, y = p.y;
   const hw = size*0.5, hh = size*0.42;
 
   ctx.save();
-  ctx.globalAlpha = a * (0.72 + 0.28*Math.sin(now/170));
+  ctx.globalAlpha = 0.8;
   ctx.beginPath();
   ctx.moveTo(x + dir*hw, y);
   ctx.lineTo(x - dir*hw*0.55, y - hh);
