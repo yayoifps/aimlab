@@ -109,13 +109,25 @@ def main():
             hit_note = "%dx%d  %.1f KB  scale %.3f" % (
                 hit_out.width, hit_out.height, hit_bytes / 1024, hit_scale)
 
+        # 追従中に交互表示するコマ（<stem>_dm_*.png）
+        dm = []
+        for f2 in sorted(os.listdir(SRC)):
+            if not f2.startswith(stem + "_dm_") or not f2.lower().endswith(".png"):
+                continue
+            im2 = scaled(trimmed(os.path.join(SRC, f2)), factor)
+            uri2, b2 = encode(im2)
+            total += b2
+            dm.append((uri2, im2.height / MAX_H))
+            print("      dm %-14s %dx%d  %.1f KB  scale %.3f"
+                  % (f2, im2.width, im2.height, b2 / 1024, im2.height / MAX_H))
+
         label = names.get(stem, stem)
-        entries.append((stem, label, base_out.size, base_uri, hit_uri, hit_scale))
+        entries.append((stem, label, base_out.size, base_uri, hit_uri, hit_scale, dm))
         print("%-4s  %-10s base %dx%d  %6.1f KB   hit %s"
               % (stem, label, base_out.width, base_out.height, base_bytes / 1024, hit_note))
 
     body = "const CHARACTER_SPRITES = [\n"
-    for stem, label, size, base_uri, hit_uri, hit_scale in entries:
+    for stem, label, size, base_uri, hit_uri, hit_scale, dm in entries:
         body += "  /* %s = %s  %dx%d */\n  {\n" % (stem, label, size[0], size[1])
         body += "    id: %s,\n" % json_str(stem)
         body += "    name: %s,\n" % json_str(label)
@@ -123,6 +135,11 @@ def main():
         if hit_uri:
             body += "    hit: '%s',\n" % hit_uri
             body += "    hitScale: %.4f,\n" % hit_scale
+        if dm:
+            body += "    dm: [\n"
+            for uri2, sc2 in dm:
+                body += "      { src: '%s', scale: %.4f },\n" % (uri2, sc2)
+            body += "    ],\n"
         body += "  },\n"
     body += "];\n"
 
