@@ -717,7 +717,7 @@ const DEG = Math.PI/180, clamp=(v,a,b)=>v<a?a:v>b?b:v;
 /* ビルド識別子 — build_sprites.py が更新します。
    画面右上に出るので「今どの版を見ているか」がすぐ分かります。 */
 /* BUILD_BEGIN */
-const BUILD = '0825-1606';
+const BUILD = '0825-1612';
 /* BUILD_END */
 
 /* 撃破ボイス。src/voice/<キャラ番号>-*.mp3 を build_sprites.py が埋め込みます。
@@ -1063,7 +1063,9 @@ function sanitize(o){
   return o;
 }
 
-const STORED = loadJSON(STORE) || {};
+// 保存済みの設定も同じ経路で通す。同じ github.io 上の別ページと
+// localStorage を共有するため、ここも素通しにはしない。
+const STORED = pickKnown(loadJSON(STORE) || {}, DEFAULTS);
 let S = sanitize(deepMerge(structuredClone(DEFAULTS), STORED));
 // 設定の世代が古ければ、制限時間だけ新しい既定値に揃える
 if(STORED.sv !== DEFAULTS.sv){ S.duration = DEFAULTS.duration; S.sv = DEFAULTS.sv; }
@@ -1076,9 +1078,33 @@ if(STORED.sv3 !== DEFAULTS.sv3){ S.lsDist = DEFAULTS.lsDist; S.sv3 = DEFAULTS.sv
 let BEST = loadJSON(STORE+':best') || {};
 let LAST = loadJSON(STORE+':last') || {};   // 直前のランの成績（タスクごと）
 
+// __proto__ などを素通しすると、細工した共有リンクで Object.prototype を
+// 書き換えられてしまうので弾く。
+// 関数宣言にしておく。const は巻き上げられないので、
+// これより前の行から deepMerge が呼ばれた時点で落ちてしまう。
+function UNSAFE_KEY(k){ return k==='__proto__' || k==='constructor' || k==='prototype'; }
+
 function deepMerge(a,b){ for(const k in b){
+  if(UNSAFE_KEY(k)) continue;
   if(b[k] && typeof b[k]==='object' && !Array.isArray(b[k])) deepMerge(a[k]=a[k]||{}, b[k]);
   else a[k]=b[k]; } return a; }
+
+/* 外から来た設定は、既定値に同じ名前・同じ型で存在するキーだけ受け入れる。
+   知らないキーは捨てるので、想定外のものが S に混ざらない。 */
+function pickKnown(src, ref){
+  const out = {};
+  if(!src || typeof src!=='object') return out;
+  for(const k of Object.keys(ref)){
+    if(UNSAFE_KEY(k) || !Object.prototype.hasOwnProperty.call(src, k)) continue;
+    const v = src[k], r = ref[k];
+    if(r && typeof r==='object' && !Array.isArray(r)){
+      if(v && typeof v==='object') out[k] = pickKnown(v, r);
+    }else if(typeof v === typeof r){
+      out[k] = v;
+    }
+  }
+  return out;
+}
 function loadJSON(k){ try{ return JSON.parse(localStorage.getItem(k)); }catch(e){ return null; } }
 function saveAll(){
   try{ localStorage.setItem(STORE, JSON.stringify(S));
@@ -1095,7 +1121,7 @@ function setPath(o,p,v){ const ks=p.split('.'); const last=ks.pop();
   if(!m) return;
   try{
     const j = JSON.parse(decodeURIComponent(escape(atob(m[1].replace(/-/g,'+').replace(/_/g,'/')))));
-    S = sanitize(deepMerge(S, j));
+    S = sanitize(deepMerge(S, pickKnown(j, DEFAULTS)));
   }catch(e){}
 })();
 
