@@ -717,7 +717,7 @@ const DEG = Math.PI/180, clamp=(v,a,b)=>v<a?a:v>b?b:v;
 /* ビルド識別子 — build_sprites.py が更新します。
    画面右上に出るので「今どの版を見ているか」がすぐ分かります。 */
 /* BUILD_BEGIN */
-const BUILD = '0825-1557';
+const BUILD = '0825-1602';
 /* BUILD_END */
 
 /* 撃破ボイス。src/voice/<キャラ番号>-*.mp3 を build_sprites.py が埋め込みます。
@@ -998,7 +998,7 @@ const DEFAULTS = {
   deathTime:0.4,
   sideSwap:4, strafeSpan:3.5, strafeSpeed:'both',
   strafeDist:12, speedMul:0.65, respawnDelay:0.4, widthMul:0.78,
-  lsDist:14, lsSpan:7, lsSpeed:0.62, lsFlip:2.2,
+  lsDist:12, lsSpan:7, lsSpeed:0.62, lsFlip:2.2, sv3:2,
   volume:0.5, voiceVol:0.75, voiceOn:true, sv2:2,
   showRoom:true, hitmarker:true, popups:true, rim:true, rimW:2, shatter:true,
   bgColor:'#0A1015',
@@ -1041,6 +1041,8 @@ if(STORED.sv !== DEFAULTS.sv){ S.duration = DEFAULTS.duration; S.sv = DEFAULTS.s
 if(STORED.sv2 !== DEFAULTS.sv2){
   S.volume = DEFAULTS.volume; S.voiceVol = DEFAULTS.voiceVol; S.sv2 = DEFAULTS.sv2;
 }
+// Long Strafes の距離を詰めたので、保存済みの値も一度だけ新しい既定に戻す
+if(STORED.sv3 !== DEFAULTS.sv3){ S.lsDist = DEFAULTS.lsDist; S.sv3 = DEFAULTS.sv3; }
 let BEST = loadJSON(STORE+':best') || {};
 let LAST = loadJSON(STORE+':last') || {};   // 直前のランの成績（タスクごと）
 
