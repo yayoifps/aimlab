@@ -657,6 +657,11 @@ button{cursor:pointer;}
         VALORANT に合わせ <b>16:9 で水平 103°</b>、垂直 FOV は 70.5° 固定（Vert−）です。
         ウィンドウ比率が変わっても垂直が保たれるので、本家と同じ見え方になります。
       </p>
+      <div class="sect">Background</div>
+      <label class="ctl wide"><span>背景色<small>床・壁・的の縁取りの明暗も自動で追随します</small></span>
+        <input type="color" data-bind="bgColor"></label>
+      <div class="swatches" id="bgSwatches"></div>
+
       <div class="sect">Scene</div>
       <label class="ctl wide"><span>グリッド床</span><span class="sw"><input type="checkbox" data-bind="showRoom"><i></i></span></label>
       <label class="ctl wide"><span>ターゲット縁取り<small>暗背景でキャラを見やすくする</small></span><span class="sw"><input type="checkbox" data-bind="rim"><i></i></span></label>
@@ -688,7 +693,7 @@ const DEG = Math.PI/180, clamp=(v,a,b)=>v<a?a:v>b?b:v;
 /* ビルド識別子 — build_sprites.py が更新します。
    画面右上に出るので「今どの版を見ているか」がすぐ分かります。 */
 /* BUILD_BEGIN */
-const BUILD = '0825-1337';
+const BUILD = '0825-1341';
 /* BUILD_END */
 
 /* SPRITES_BEGIN */
@@ -810,7 +815,7 @@ const strafeSpeedOf = (run, S) => (run ? VAL_SPEED.run : VAL_SPEED.walk) * S.spe
 function drawStrafeWalls(S){
   const z = WALL.z(S);
   // 正面の壁は明るめ、手前へ折り返す側壁は暗め。面の向きの違いを色で出す。
-  const stone = '#1D2830', flank = '#131B22', edge = '#33434E', corner = '#4A5D6B';
+  const stone = THEME.stone, flank = THEME.flank, edge = THEME.edge, corner = THEME.corner;
 
   for(const s of [1, -1]){
     const inner = s*S.strafeSpan, far = s*WALL.side;
@@ -904,6 +909,7 @@ const DEFAULTS = {
   sideSwap:4, strafeSpan:3.5, strafeSpeed:'both',
   strafeDist:12, speedMul:0.65, respawnDelay:0.4, widthMul:0.78,
   volume:0.45, showRoom:true, hitmarker:true, popups:true, rim:true, rimW:2,
+  bgColor:'#0A1015',
   ch:{ colorIdx:5, custom:'#00FFFF',
        outline:true, outlineT:1, outlineA:0.5,
        dot:false, dotZ:2, dotA:1,
@@ -930,6 +936,7 @@ function sanitize(o){
     const [lo,hi] = RANGES[k], v = Number(o[k]);
     if(!isFinite(v) || v < lo || v > hi) o[k] = DEFAULTS[k];
   }
+  if(!/^#[0-9a-f]{6}$/i.test(String(o.bgColor))) o.bgColor = DEFAULTS.bgColor;
   return o;
 }
 
@@ -979,12 +986,17 @@ function makeSprite(src){
   if(data) for(let i=0,n=w*h;i<n;i++) alpha[i]=data[i*4+3];
   else alpha.fill(255);
   // 暗い背景でもキャラの輪郭が見えるよう、白抜きシルエットを作っておく
-  const sc=document.createElement('canvas'); sc.width=w; sc.height=h;
-  const sg=sc.getContext('2d');
-  sg.drawImage(src,0,0);
-  sg.globalCompositeOperation='source-in';
-  sg.fillStyle='#FFFFFF'; sg.fillRect(0,0,w,h);
-  return { img:src, w, h, alpha, aspect:w/h, sil:sc, hScale:1 };
+  const mkSil = col => {
+    const c = document.createElement('canvas'); c.width=w; c.height=h;
+    const g = c.getContext('2d');
+    g.drawImage(src,0,0);
+    g.globalCompositeOperation='source-in';
+    g.fillStyle=col; g.fillRect(0,0,w,h);
+    return c;
+  };
+  // 背景の明るさに応じて使い分けるので、白と黒の両方を作っておく
+  return { img:src, w, h, alpha, aspect:w/h,
+           sil:mkSil('#FFFFFF'), silDark:mkSil('#05080A'), hScale:1 };
 }
 
 function buildFallbackSprite(){
@@ -1041,6 +1053,46 @@ function spriteOf(t){
   if(t.dead && e.hit) return e.hit;
   return e.base;
 }
+
+/* ═══════════════════════════════════════════════════════════
+   4.5 背景色まわり
+   背景を差し替えるだけだと、明るい色にしたとき床のグリッドや
+   的の縁取りが見えなくなる。選んだ色から明暗を導いて、
+   どんな色でも各要素のコントラストが保たれるようにする。
+   ═══════════════════════════════════════════════════════════ */
+function shade(hex, amt){
+  const n = parseInt(hex.slice(1), 16);
+  const t = amt > 0 ? 255 : 0, p = Math.abs(amt);
+  const r = Math.round(((n>>16)&255) + (t-((n>>16)&255))*p);
+  const g = Math.round(((n>>8)&255)  + (t-((n>>8)&255))*p);
+  const b = Math.round((n&255)       + (t-(n&255))*p);
+  return '#' + ((1<<24)|(r<<16)|(g<<8)|b).toString(16).slice(1);
+}
+function lum(hex){
+  const n = parseInt(hex.slice(1), 16);
+  return (((n>>16)&255)*0.299 + ((n>>8)&255)*0.587 + (n&255)*0.114) / 255;
+}
+
+let THEME = {};
+function rebuildTheme(){
+  const b = S.bgColor, L = lum(b);
+  const d = L > 0.5 ? -1 : 1;          // 暗い背景なら明るく、明るい背景なら暗く
+  THEME = {
+    top:      shade(b,  0.06),
+    mid:      b,
+    bottom:   shade(b, -0.30),
+    floor:    shade(b, d*0.20),
+    floorDim: shade(b, d*0.13),
+    wallGrid: shade(b, d*0.09),
+    stone:    shade(b, d*0.14),
+    flank:    shade(b, d*0.05),
+    edge:     shade(b, d*0.28),
+    corner:   shade(b, d*0.44),
+    darkRim:  L > 0.5,                  // 明るい背景では的の縁取りを黒に
+    vignette: Math.max(0, 0.63*(1 - L))
+  };
+}
+rebuildTheme();      // 最初の描画より前に必ず用意しておく
 
 /* ═══════════════════════════════════════════════════════════
    5. 3D レンダラ（Canvas 2D / ビルボード）
@@ -1108,11 +1160,11 @@ function drawRoom(){
   const back = -S.dist-4.5, side = 8.5, ceil = 5.2;
   ctx.lineWidth = 1;
   // 床
-  for(let z=0; z>=back; z-=1) seg3D({x:-side,y:0,z},{x:side,y:0,z}, '#1E3038', 0.5*(1+z/back*0.7));
-  for(let x=-side; x<=side; x+=1) seg3D({x,y:0,z:2},{x,y:0,z:back}, '#1A2A31', 0.35);
+  for(let z=0; z>=back; z-=1) seg3D({x:-side,y:0,z},{x:side,y:0,z}, THEME.floor, 0.5*(1+z/back*0.7));
+  for(let x=-side; x<=side; x+=1) seg3D({x,y:0,z:2},{x,y:0,z:back}, THEME.floorDim, 0.35);
   // 奥の壁
-  for(let x=-side; x<=side; x+=1) seg3D({x,y:0,z:back},{x,y:ceil,z:back}, '#182229', 0.5);
-  for(let y=0; y<=ceil; y+=1) seg3D({x:-side,y,z:back},{x:side,y,z:back}, '#182229', 0.5);
+  for(let x=-side; x<=side; x+=1) seg3D({x,y:0,z:back},{x,y:ceil,z:back}, THEME.wallGrid, 0.5);
+  for(let y=0; y<=ceil; y+=1) seg3D({x:-side,y,z:back},{x:side,y,z:back}, THEME.wallGrid, 0.5);
   // アイレベルの基準線
   seg3D({x:-side,y:EYE,z:back},{x:side,y:EYE,z:back}, '#C7621F', 0.28);
 }
@@ -1384,7 +1436,7 @@ function frame(now){
 
   ctx.setTransform(DPR,0,0,DPR,0,0);
   const bg = ctx.createLinearGradient(0,0,0,H);
-  bg.addColorStop(0,'#0A1015'); bg.addColorStop(0.55,'#070B0E'); bg.addColorStop(1,'#04070A');
+  bg.addColorStop(0, THEME.top); bg.addColorStop(0.55, THEME.mid); bg.addColorStop(1, THEME.bottom);
   ctx.fillStyle=bg; ctx.fillRect(0,0,W,H);
 
   if(S.showRoom) drawRoom();
@@ -1417,9 +1469,12 @@ function frame(now){
   }
 
   // ビネット
-  const vg = ctx.createRadialGradient(W/2,H/2,Math.min(W,H)*0.35, W/2,H/2, Math.max(W,H)*0.75);
-  vg.addColorStop(0,'#0000'); vg.addColorStop(1,'#000000A0');
-  ctx.fillStyle=vg; ctx.fillRect(0,0,W,H);
+  if(THEME.vignette > 0.02){
+    const vg = ctx.createRadialGradient(W/2,H/2,Math.min(W,H)*0.35, W/2,H/2, Math.max(W,H)*0.75);
+    vg.addColorStop(0,'rgba(0,0,0,0)');
+    vg.addColorStop(1,'rgba(0,0,0,'+THEME.vignette.toFixed(2)+')');
+    ctx.fillStyle=vg; ctx.fillRect(0,0,W,H);
+  }
 }
 requestAnimationFrame(frame);
 
@@ -1446,11 +1501,12 @@ function drawTargets(now){
     const sw = sh*sp.aspect*S.widthMul;
     const alpha = a * (0.4+0.6*grow);
     if(S.rim && S.rimW>0 && sp.sil){
+      const sil = THEME.darkRim ? sp.silDark : sp.sil;   // 背景が明るいときは黒フチ
       ctx.globalAlpha = alpha*0.5;
       const o=S.rimW;
       for(let k2=0;k2<8;k2++){
         const ang=k2*Math.PI/4;
-        ctx.drawImage(sp.sil, p.x-sw/2+Math.cos(ang)*o, p.y-sh/2+Math.sin(ang)*o, sw, sh);
+        ctx.drawImage(sil, p.x-sw/2+Math.cos(ang)*o, p.y-sh/2+Math.sin(ang)*o, sw, sh);
       }
     }
     ctx.globalAlpha = alpha;
@@ -1829,6 +1885,8 @@ function syncInputs(){
     else el.value = v;
   });
   $$('#chSwatches button').forEach((b,i)=>b.setAttribute('aria-pressed', String(S.ch.colorIdx===i)));
+  $$('#bgSwatches button').forEach(b=>b.setAttribute('aria-pressed',
+    String(b.title.toLowerCase() === String(S.bgColor).toLowerCase())));
   refreshReadouts(); renderDetail(); drawChPreview();
 }
 document.addEventListener('input', e=>{
@@ -1841,6 +1899,7 @@ document.addEventListener('input', e=>{
   else v = el.value;
   setPath(S, path, v);
   if(path==='ch.custom') S.ch.colorIdx = 8;
+  if(path==='bgColor') rebuildTheme();
   $$('[data-bind="'+path+'"]').forEach(o=>{ if(o!==el){
     if(o.type==='checkbox') o.checked=!!v; else o.value=v; }});
   saveAll(); refreshReadouts(); renderDetail(); drawChPreview();
@@ -1869,6 +1928,18 @@ function refreshFov(){
   const e=$('#roFovH'); if(e) e.textContent = hf.toFixed(1)+'°';
   const a=$('#roAsp'); if(a) a.textContent = (W/H).toFixed(2)+':1';
 }
+
+/* ── 背景色のプリセット ── */
+const BG_PRESETS = ['#0A1015','#000000','#101010','#123044','#0E2A20','#2A1230','#3A2410','#6E7A82','#C8CED2','#FFFFFF'];
+(function buildBgSwatches(){
+  const wrap = $('#bgSwatches');
+  BG_PRESETS.forEach(c=>{
+    const b = document.createElement('button');
+    b.type='button'; b.style.background=c; b.title=c;
+    b.onclick = ()=>{ S.bgColor=c; rebuildTheme(); saveAll(); syncInputs(); };
+    wrap.appendChild(b);
+  });
+})();
 
 /* ── 色スウォッチ ── */
 (function buildSwatches(){
@@ -1966,6 +2037,7 @@ function toast(msg){
 
 /* ── 起動 ── */
 $$('.buildtag').forEach(e=>{ e.textContent = 'build ' + BUILD; });
+rebuildTheme();
 resize();
 renderTaskList();
 syncInputs();
