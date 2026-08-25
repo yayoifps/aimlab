@@ -601,8 +601,11 @@ button{cursor:pointer;}
         <input type="range" data-bind="sideSwap" min="1" max="20" step="0.5">
         <input type="number" class="num" data-bind="sideSwap" min="1" max="20" step="0.5"></label>
       <label class="ctl"><span>壁の間隔<small>メートル／中心から左右の壁まで</small></span>
-        <input type="range" data-bind="strafeSpan" min="2" max="12" step="0.5">
-        <input type="number" class="num" data-bind="strafeSpan" min="2" max="12" step="0.5"></label>
+        <input type="range" data-bind="strafeSpan" min="1.5" max="12" step="0.5">
+        <input type="number" class="num" data-bind="strafeSpan" min="1.5" max="12" step="0.5"></label>
+      <label class="ctl"><span>出てくるまでの間<small>秒／倒してから次が姿を現すまで</small></span>
+        <input type="range" data-bind="respawnDelay" min="0" max="2" step="0.05">
+        <input type="number" class="num" data-bind="respawnDelay" min="0" max="2" step="0.05"></label>
       <label class="ctl"><span>距離<small>メートル／壁までの奥行き</small></span>
         <input type="range" data-bind="strafeDist" min="6" max="30" step="0.5">
         <input type="number" class="num" data-bind="strafeDist" min="6" max="30" step="0.5"></label>
@@ -667,7 +670,7 @@ const DEG = Math.PI/180, clamp=(v,a,b)=>v<a?a:v>b?b:v;
 /* ビルド識別子 — build_sprites.py が更新します。
    画面右上に出るので「今どの版を見ているか」がすぐ分かります。 */
 /* BUILD_BEGIN */
-const BUILD = '0825-1144';
+const BUILD = '0825-1153';
 /* BUILD_END */
 
 /* SPRITES_BEGIN */
@@ -742,17 +745,19 @@ defineTask({
   center(S){ return { x:0, y:EYE, z:-S.strafeDist }; },
 
   spawn(G,S){
-    const edge = strafeEdge(S);                   // 壁の裏（見えない位置）から歩き出す
     // 経過時間で出てくる側が入れ替わる（0〜4秒は右、4〜8秒は左…）
     const fromRight = Math.floor((G.started ? G.elapsed : 0) / S.sideSwap) % 2 === 0;
     const useRun = S.strafeSpeed==='run'  ? true
                  : S.strafeSpeed==='walk' ? false
                  : Math.random() < 0.5;
     const v = strafeSpeedOf(useRun, S);
+    // 助走の距離ではなく時間で決める。こうすると走りでも歩きでも
+    // 「湧いてから姿を現すまで」が同じになる。
+    const edge = S.strafeSpan + v*S.respawnDelay;
     return newTarget({
       x: fromRight ? edge : -edge, y: EYE, z: -S.strafeDist,
       vx: fromRight ? -v : v,
-      edge, run: useRun
+      edge, run: useRun, from: fromRight ? 1 : -1
     });
   },
 
@@ -771,8 +776,8 @@ defineTask({
   // 壁の陰にいる的は撃てない（見えていない部分は当たり判定も無い）
   canHitAt(t, worldX, S){ return Math.abs(worldX) <= S.strafeSpan; },
 
-  // 的より手前。ここで壁の裏を隠す。
-  drawOverlay(S){ drawStrafeWalls(S); }
+  // 的より手前。ここで壁の裏を隠し、次に出てくる側へ矢印を出す。
+  drawOverlay(S, now){ drawStrafeWalls(S); drawSideArrow(S, now); }
 });
 
 /* ── Strafe の壁 ──
@@ -780,7 +785,6 @@ defineTask({
    壁は的と同じ奥行きに置く。手前にずらすと遠近法で
    「見えなくなる位置」と「当たらなくなる位置」がズレるため。 */
 const WALL = { side:9, top:11, near:1.0, z: S => -S.strafeDist };
-const strafeEdge = S => S.strafeSpan + 2.6;
 // VALORANT の実速度に倍率をかけたもの。1.0 で本家と同じ。
 const strafeSpeedOf = (run, S) => (run ? VAL_SPEED.run : VAL_SPEED.walk) * S.speedMul;
 
@@ -820,6 +824,45 @@ function drawStrafeWalls(S){
   }
 }
 
+/* 次に的が出てくる側を示す矢印。壁の裏に隠れている間だけ出て、
+   姿を現すにつれて消える。 */
+function drawSideArrow(S, now){
+  const t = G.targets.find(o => !o.dead && o.from);
+  if(!t) return;
+  const hidden = (Math.abs(t.x) - S.strafeSpan) / 0.9;      // 1=完全に裏、0=出きった
+  const a = clamp(hidden, 0, 1);
+  if(a <= 0.02) return;
+
+  const s = t.from;
+  const c = toCam({ x: s*(S.strafeSpan - 0.35), y: EYE + 1.45, z: -S.strafeDist });
+  if(c.z > -0.2) return;
+  const p = project(c);
+  const size = clamp(560/p.d, 13, 46);
+  const dir = -s;                                          // 進行方向＝内側
+  const bob = Math.sin(now/170) * size*0.12;
+  const x = p.x + dir*bob, y = p.y;
+  const hw = size*0.5, hh = size*0.42;
+
+  ctx.save();
+  ctx.globalAlpha = a * (0.72 + 0.28*Math.sin(now/170));
+  ctx.beginPath();
+  ctx.moveTo(x + dir*hw, y);
+  ctx.lineTo(x - dir*hw*0.55, y - hh);
+  ctx.lineTo(x - dir*hw*0.55, y - hh*0.34);
+  ctx.lineTo(x - dir*hw, y - hh*0.34);
+  ctx.lineTo(x - dir*hw, y + hh*0.34);
+  ctx.lineTo(x - dir*hw*0.55, y + hh*0.34);
+  ctx.lineTo(x - dir*hw*0.55, y + hh);
+  ctx.closePath();
+  ctx.fillStyle = '#FF8A3D';
+  ctx.strokeStyle = '#0A0D10';
+  ctx.lineWidth = Math.max(1.5, size*0.09);
+  ctx.lineJoin = 'round';
+  ctx.stroke();
+  ctx.fill();
+  ctx.restore();
+}
+
 /* ── 追加例（コメントを外せばそのまま動きます） ──
 defineTask({
   id:'microshot', name:'Microshot', jp:'マイクロショット', category:'PRECISION', glyph:'dot',
@@ -842,8 +885,8 @@ const DEFAULTS = {
   sv:2,                                  // 設定の世代。上げると duration が既定に戻る
   duration:30, concurrent:3, cols:4, rows:3, targetSize:1.5, dist:8.5, alphaHit:true,
   deathTime:0.4,
-  sideSwap:4, strafeSpan:5, strafeSpeed:'both',
-  strafeDist:12, speedMul:0.65,
+  sideSwap:4, strafeSpan:3.5, strafeSpeed:'both',
+  strafeDist:12, speedMul:0.65, respawnDelay:0.3,
   volume:0.45, showRoom:true, hitmarker:true, popups:true, rim:true, rimW:2,
   ch:{ colorIdx:5, custom:'#00FFFF',
        outline:true, outlineT:1, outlineA:0.5,
@@ -862,7 +905,7 @@ const RANGES = {
   sens:[0.01,10], dpi:[100,32000], rawMul:[0.1,5], swivelRange:[5,120],
   countdown:[0,10], duration:[10,600], concurrent:[1,8], cols:[2,8], rows:[1,8],
   targetSize:[0.3,3], dist:[4,40], deathTime:[0.05,3], volume:[0,1], rimW:[0,8],
-  sideSwap:[1,20], strafeSpan:[2,12],
+  sideSwap:[1,20], strafeSpan:[1.5,12], respawnDelay:[0,2],
   strafeDist:[6,30], speedMul:[0.15,1.5]
 };
 function sanitize(o){
@@ -1338,7 +1381,7 @@ function frame(now){
       if(G.elapsed >= S.duration){ G.elapsed=S.duration; updateHud(); endRun(); }
     }
     drawTargets(now);
-    if(task.drawOverlay) task.drawOverlay(S);   // 的を隠す壁は的より後に描く
+    if(task.drawOverlay) task.drawOverlay(S, now);   // 的を隠す壁は的より後に描く
     drawFx(now);
     const [ax, ay] = aimPt();
     drawCrosshair(ctx, ax, ay, S.ch, DPR);
