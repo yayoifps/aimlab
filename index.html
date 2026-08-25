@@ -666,6 +666,7 @@ button{cursor:pointer;}
       <label class="ctl wide"><span>グリッド床</span><span class="sw"><input type="checkbox" data-bind="showRoom"><i></i></span></label>
       <label class="ctl wide"><span>ターゲット縁取り<small>暗背景でキャラを見やすくする</small></span><span class="sw"><input type="checkbox" data-bind="rim"><i></i></span></label>
       <label class="ctl"><span>縁取りの太さ</span><input type="range" data-bind="rimW" min="0" max="6" step="0.5"><input type="number" class="num" data-bind="rimW" min="0" max="8" step="0.5"></label>
+      <label class="ctl wide"><span>撃破時に砕け散る<small>切ると従来のフェードアウトに戻ります</small></span><span class="sw"><input type="checkbox" data-bind="shatter"><i></i></span></label>
       <label class="ctl wide"><span>ヒットマーカー</span><span class="sw"><input type="checkbox" data-bind="hitmarker"><i></i></span></label>
       <label class="ctl wide"><span>ダメージポップ</span><span class="sw"><input type="checkbox" data-bind="popups"><i></i></span></label>
       <div class="sect">Reset</div>
@@ -693,7 +694,7 @@ const DEG = Math.PI/180, clamp=(v,a,b)=>v<a?a:v>b?b:v;
 /* ビルド識別子 — build_sprites.py が更新します。
    画面右上に出るので「今どの版を見ているか」がすぐ分かります。 */
 /* BUILD_BEGIN */
-const BUILD = '0825-1341';
+const BUILD = '0825-1346';
 /* BUILD_END */
 
 /* SPRITES_BEGIN */
@@ -908,7 +909,7 @@ const DEFAULTS = {
   deathTime:0.4,
   sideSwap:4, strafeSpan:3.5, strafeSpeed:'both',
   strafeDist:12, speedMul:0.65, respawnDelay:0.4, widthMul:0.78,
-  volume:0.45, showRoom:true, hitmarker:true, popups:true, rim:true, rimW:2,
+  volume:0.45, showRoom:true, hitmarker:true, popups:true, rim:true, rimW:2, shatter:true,
   bgColor:'#0A1015',
   ch:{ colorIdx:5, custom:'#00FFFF',
        outline:true, outlineT:1, outlineA:0.5,
@@ -1460,6 +1461,7 @@ function frame(now){
       if(G.elapsed >= S.duration){ G.elapsed=S.duration; updateHud(); endRun(); }
     }
     drawTargets(now);
+    drawShards(now);
     if(task.drawOverlay) task.drawOverlay(S, now);   // 的を隠す壁は的より後に描く
     drawFx(now);
     const [ax, ay] = aimPt();
@@ -1490,15 +1492,25 @@ function drawTargets(now){
     const p=project(c);
     const grow = Math.min(1,(now-t.born)/90);
     let a=1, k=1;
+    const sh0 = f*targetHeight()*sp.hScale/p.d * (0.6+0.4*grow);
+    const sw0 = sh0*sp.aspect*S.widthMul;
     if(t.dead){
-      const e=(now-t.diedAt)/(S.deathTime*1000);
-      if(e>=1){ continue; }
-      // 撃たれポーズがある間はしっかり見せて、最後だけフェードで消す
-      if(sp.hScale!==1 || SPRITES[t.sp]?.hit) a = e<0.65 ? 1 : 1-(e-0.65)/0.35;
-      else { a = 1-e; k = 1+e*0.35; }
+      const ms = now - t.diedAt, life = S.deathTime*1000;
+      if(ms >= life) continue;
+      if(S.shatter){
+        // ひびが入って静止 → 砕けて飛ぶ、の2段構え
+        if(ms >= life*0.45){
+          if(!t.shattered){ t.shattered = true; spawnShards(sp, p.x, p.y, sw0, sh0, now); }
+          continue;                       // 本体はもう描かない
+        }
+      }else{
+        const e = ms/life;
+        if(sp.hScale!==1 || SPRITES[t.sp]?.hit) a = e<0.65 ? 1 : 1-(e-0.65)/0.35;
+        else { a = 1-e; k = 1+e*0.35; }
+      }
     }
-    const sh = f*targetHeight()*sp.hScale/p.d * (0.6+0.4*grow) * k;
-    const sw = sh*sp.aspect*S.widthMul;
+    const sh = sh0*k;
+    const sw = sw0*k;
     const alpha = a * (0.4+0.6*grow);
     if(S.rim && S.rimW>0 && sp.sil){
       const sil = THEME.darkRim ? sp.silDark : sp.sil;   // 背景が明るいときは黒フチ
@@ -1516,6 +1528,58 @@ function drawTargets(now){
   // 撃たれた的の掃除
   for(let i=G.targets.length-1;i>=0;i--)
     if(G.targets[i].dead && now-G.targets[i].diedAt > S.deathTime*1000) G.targets.splice(i,1);
+}
+
+/* ── 撃破時の破砕（UNDERTALE のハートが砕けるイメージ）──
+   的の絵をタイル状に切り分け、それぞれを初速＋重力＋回転で飛ばす。
+   速度も重力も画面上の的の大きさに比例させているので、
+   遠くの的でも近くの的でも同じ勢いに見える。 */
+const SHARD_COLS = 4, SHARD_ROWS = 6;
+
+function pieceHasPixels(sp, i, j){
+  const x0 = (i*sp.w/SHARD_COLS)|0, x1 = ((i+1)*sp.w/SHARD_COLS)|0;
+  const y0 = (j*sp.h/SHARD_ROWS)|0, y1 = ((j+1)*sp.h/SHARD_ROWS)|0;
+  for(let y=y0; y<y1; y+=3)
+    for(let x=x0; x<x1; x+=3)
+      if(sp.alpha[y*sp.w+x] > 60) return true;
+  return false;
+}
+
+function spawnShards(sp, cx, cy, sw, sh, now){
+  const spw = sp.w/SHARD_COLS, sph = sp.h/SHARD_ROWS;
+  const dw = sw/SHARD_COLS,    dh = sh/SHARD_ROWS;
+  for(let i=0;i<SHARD_COLS;i++) for(let j=0;j<SHARD_ROWS;j++){
+    if(!pieceHasPixels(sp, i, j)) continue;          // 透明な断片は飛ばさない
+    const ox = (i+0.5)/SHARD_COLS - 0.5, oy = (j+0.5)/SHARD_ROWS - 0.5;
+    const ang = Math.atan2(oy, ox*1.5) + (Math.random()-0.5)*0.8;
+    const spd = sh * (1.0 + Math.random()*2.1);
+    G.fx.push({
+      type:'shard', t:now, life: 640 + Math.random()*280,
+      img: sp.img, sx: i*spw, sy: j*sph, spw, sph,
+      x: cx + ox*sw, y: cy + oy*sh, w: dw*1.02, h: dh*1.02,
+      vx: Math.cos(ang)*spd,
+      vy: Math.sin(ang)*spd - sh*1.5,                 // いったん跳ね上がってから落ちる
+      g:  sh*11,
+      rot:(Math.random()-0.5)*0.5, vr:(Math.random()-0.5)*7.5
+    });
+  }
+}
+
+// 破片は壁より先に描く（壁の裏へ飛んだ破片が手前に出てこないように）
+function drawShards(now){
+  for(let i=G.fx.length-1;i>=0;i--){
+    const x = G.fx[i];
+    if(x.type!=='shard') continue;
+    const age = now - x.t;
+    if(age >= x.life){ G.fx.splice(i,1); continue; }
+    const s = age/1000, e = age/x.life;
+    ctx.save();
+    ctx.globalAlpha = e < 0.5 ? 1 : 1 - (e-0.5)/0.5;
+    ctx.translate(x.x + x.vx*s, x.y + x.vy*s + 0.5*x.g*s*s);
+    ctx.rotate(x.rot + x.vr*s);
+    ctx.drawImage(x.img, x.sx, x.sy, x.spw, x.sph, -x.w/2, -x.h/2, x.w, x.h);
+    ctx.restore();
+  }
 }
 
 function drawCountdown(now){
@@ -1548,6 +1612,7 @@ function drawCountdown(now){
 function drawFx(now){
   for(let i=G.fx.length-1;i>=0;i--){
     const x=G.fx[i], age=now-x.t;
+    if(x.type==='shard'){ continue; }        // 破片は drawShards が受け持つ
     if(x.type==='ring'){
       const e=age/260; if(e>=1){ G.fx.splice(i,1); continue; }
       ctx.globalAlpha=(1-e)*0.9; ctx.strokeStyle='#3FE0A8'; ctx.lineWidth=2;
