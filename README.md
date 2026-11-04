@@ -57,15 +57,16 @@ KovaaK's のプレイリスト（シェアコード `KovaaKsChatfraggingGhostpee
 
 | タスク | 回数 | 内容 |
 |---|---|---|
-| Air Angelic 4 Voltaic Easy | 2 | 空中をなめらかに弧を描いて飛ぶ的を追う（60秒） |
-| Centering 90 Easy No Strafes | 2 | 正面 90° の弧を往復する的を追う。自分は動かない（60秒） |
-| waldoTS | 2 | 小刻みに動く小さな的3体を、追って削り切っては切り替える（60秒） |
-| eth FP OGG Micro 60 | 2 | 小さな的が四角の点と円の点に交互に出る（60秒） |
-| Amare Dynamic TAF Micro | 3 | 真ん中の的と、近くに出る2体目を一息で撃つ（60秒） |
-| eth Valorant Layered Control v3 40s | 3 | 近・中・遠に ADAD で動いては止まる的（40秒） |
-| Valorant Fireworks Flick Horizontal - Far | 3 | 遠くの的を撃つと左右へ4体がはじけて広がる（60秒） |
+| Air Angelic 4 Voltaic Easy | 2 | 自分の周りを跳ねながら左右に動く球を、撃ちっぱなしで追う（60秒） |
+| Centering 90 Easy No Strafes | 2 | 18m 先、正面 90° の弧を往復する細い柱を追う（60秒） |
+| waldoTS | 2 | 40〜74m 先の球 3 体を、撃ちっぱなしで削り切っては切り替える（60秒） |
+| eth FP OGG Micro 60 | 2 | 奥から迫る四角と、止まった小さな円を交互に撃つ（60秒） |
+| Amare Dynamic TAF Micro | 3 | 87m 先のポケボールと、周りに出るもう 1 つを一息で撃つ（30秒・外すと −2 点） |
+| eth Valorant Layered Control v3 40s | 3 | 4 つの距離に出る、回復する球を撃ちっぱなしで削り切る（48秒） |
+| Valorant Fireworks Flick Horizontal - Far | 3 | 3 本の柱の真ん中から左右へ走り出る的の、頭を撃つ（60秒） |
 
-本家の細かい数値は公開されていないので、動きは名前と説明に合わせて作っています。
+的の形・大きさ・距離・速さ・体力・点の数え方は、KovaaK's の本物のシナリオファイル（.sce）の数値に合わせています。
+撃ちっぱなしの武器のタスクは、左ボタンを押している間だけ当たります。
 
 ## 操作
 

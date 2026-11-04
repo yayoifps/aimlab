@@ -751,6 +751,7 @@ button{cursor:pointer;}
 const $  = s => document.querySelector(s);
 const $$ = s => Array.from(document.querySelectorAll(s));
 const DEG = Math.PI/180, clamp=(v,a,b)=>v<a?a:v>b?b:v;
+const EYE = 1.6;                       // 視点の高さ (m)。タスクの定義でも使うので最初に決める
 
 /* ═══════════════════════════════════════════════════════════
    1. キャラクター画像（的）
@@ -1051,10 +1052,9 @@ defineLongStrafes({
 
 /* ═══════════════════════════════════════════════════════════
    2.5 プレイリスト — KovaaK's のプレイリスト（シェアコード）のタスクを写したもの
-   元のシナリオを調べた結果と、数値を決めた理由は
-   リサーチ/2026-11-04_KovaaKsプレイリストのタスク.md にある。
-   本家の細かい数値（大きさ・速さ）は公開されていないので、名前・説明・作者の発言から
-   読み取れる動きに合わせ、距離と速さはこのアプリの単位（メートル・VALORANT の速さ）で決めた。
+   数値は、このパソコンに入っている KovaaK's の本物のシナリオファイル（.sce）から取った。
+   取り出し方と各数値の出どころは リサーチ/2026-11-04_KovaaKsプレイリストのタスク.md にある。
+   座標は「自分の目から見て 右(x)・上(y−EYE)・前(−z)」のメートル。速さは m/s。
    reps は「何回遊ぶか」。一覧の右に 2 → 1/2 → DONE と出る。
    ═══════════════════════════════════════════════════════════ */
 const PLAYLIST = {
@@ -1070,268 +1070,382 @@ const PLAYLIST = {
   ]
 };
 const rnd = (a,b) => a + Math.random()*(b-a);
+const pick = arr => arr[(Math.random()*arr.length)|0];
 const liveTargets = G => G.targets.filter(t => !t.dead);
-const wrapAng = a => Math.atan2(Math.sin(a), Math.cos(a));
+const KV_RED = '#E0262B', KV_DARKRED = '#C40000';
 
 function definePlaylistTask(def){
-  defineTask(Object.assign({ playlist:true, widthMul:1, fixedConcurrent:1, fixedDuration:60 }, def));
+  defineTask(Object.assign({ playlist:true, widthMul:1, fixedConcurrent:1, fixedDuration:60, noTally:true }, def));
+}
+
+/* 「自分を中心にした円の上を左右へ動く」的の位置。KovaaK's の左右の動き（ストレイフ）は
+   自分の方を向いたまま横へ動くので、距離を保ったまま回り込む。 */
+function placeOrbit(t){ t.x = t.dist*Math.sin(t.ang); t.z = -t.dist*Math.cos(t.ang); }
+function orbitTarget(props){
+  const t = newTarget(Object.assign({ dir:0, v:0, lrAt:0 }, props));
+  if(t.dist == null){ t.dist = Math.hypot(t.x, t.z); t.ang = Math.atan2(t.x, -t.z); }
+  placeOrbit(t);
+  return t;
+}
+/* 左右の向きを、決まった時間ごとに入れ替える（KovaaK's の Dodge Profile の MinLRTimeChange〜Max）。
+   向きを変えたら true を返す（ジャンプなどのきっかけに使う）。 */
+function strafeTick(t, G, dt, o){
+  let flipped = false;
+  if(G.elapsed >= t.lrAt){
+    t.dir = t.dir ? -t.dir : (Math.random() < 0.5 ? 1 : -1);
+    const mult = t.dir < 0 ? (o.multL||1) : (o.multR||1);
+    t.lrAt = G.elapsed + rnd(o.lr[0], o.lr[1]) * mult;
+    flipped = true;
+  }
+  const a = (o.accel||1e4) * (o.airborne ? (o.airControl||1) : 1) * dt;
+  t.v += clamp(t.dir*o.speed - t.v, -a, a);
+  t.ang += t.v / t.dist * dt;
+  // 壁などで止められたら、少し待って反対へ（BlockedMovementReaction）
+  if(o.angLim && Math.abs(t.ang) > o.angLim){
+    t.ang = Math.sign(t.ang)*o.angLim; t.v = 0;
+    if(Math.sign(t.dir) === Math.sign(t.ang)) t.lrAt = Math.min(t.lrAt, G.elapsed + (o.react||0.15));
+  }
+  placeOrbit(t);
+  return flipped;
+}
+
+/* 床の格子と壁の枠。的のいる範囲に合わせてタスクごとに大きさを決める（arena）。
+   360° 振り向くタスクもあるので、自分の後ろ側も描く。 */
+function drawArena(A){
+  const y = A.floor, [x0,x1] = A.x, [z0,z1] = A.z, st = A.step||2;
+  for(let x=Math.ceil(x0/st)*st; x<=x1; x+=st) seg3D({x,y,z:z0},{x,y,z:z1}, THEME.floorDim, 0.4);
+  for(let z=Math.ceil(z0/st)*st; z<=z1; z+=st) seg3D({x:x0,y,z},{x:x1,y,z}, THEME.floor, 0.45);
+  if(A.ceil != null){
+    const c = A.ceil;
+    for(const [x,z] of [[x0,z0],[x1,z0],[x0,z1],[x1,z1]]) seg3D({x,y,z},{x,y:c,z}, THEME.wallGrid, 0.6);
+    seg3D({x:x0,y:c,z:z0},{x:x1,y:c,z:z0}, THEME.wallGrid, 0.6); seg3D({x:x0,y:c,z:z1},{x:x1,y:c,z:z1}, THEME.wallGrid, 0.6);
+    seg3D({x:x0,y:c,z:z0},{x:x0,y:c,z:z1}, THEME.wallGrid, 0.6); seg3D({x:x1,y:c,z:z0},{x:x1,y:c,z:z1}, THEME.wallGrid, 0.6);
+  }
 }
 
 /* 床に落ちる影。空中の的の高さと奥行きをつかむ手がかり。 */
-function drawFloorShadow(t, r){
+function drawFloorShadow(t, r, y){
   if(!t) return;
   const pts = [];
-  for(let i=0;i<12;i++){ const a = i/12*Math.PI*2; pts.push({ x:t.x+Math.cos(a)*r, y:0, z:t.z+Math.sin(a)*r*0.6 }); }
+  for(let i=0;i<12;i++){ const a = i/12*Math.PI*2; pts.push({ x:t.x+Math.cos(a)*r, y, z:t.z+Math.sin(a)*r }); }
   ctx.globalAlpha = 0.45;
   fillPoly3D(pts, THEME.edge, null);
   ctx.globalAlpha = 1;
 }
 
 /* ── Air Angelic 4 Voltaic Easy ──
-   空中をなめらかに飛ぶ的を追う（Voltaic の空中トラッキング）。
-   向きは「曲がる速さ」をゆっくり変えて決めるので、急に折れずに弧を描く。
-   Easy なので的は大きめ・ゆっくりめ。
-   飛ぶ範囲は、床すれすれ（目の高さより下）から高い所まで・左右はほぼ画面いっぱい。
-   狭いと手首だけで追えてしまい、腕を使って縦横に追う練習にならないため。 */
-const AIR = { z:-11, zSwing:2.0, y0:4.1, hw:8.0, hh:3.2, speed:4.6, turn:2.6, edge:0.78 };
+   本家: 球（半径 67cm）・無敵・最高 7m/s（加速 50m/s²、空中は 1/4）・重力 3 倍。
+   自分から 7.5〜25m を保ち、自分の方を向いたまま左右へ小刻みに動く（360° 回り込む）。
+   動き方は3種類を 2:1:1 で 1.5〜2 秒ごとに入れ替える:
+     短いストレイフ 0.35〜0.6 秒 / 左寄り・右寄りのストレイフ 0.38〜0.48 秒（片側だけ 1.6 倍長い）。
+   向きを変えるたびに 65% でジャンプ（8m/s）、地面にいれば 1 秒ごとに上へ飛ぶ技（8m/s）も使う。
+   武器は撃ちっぱなし（0.01 秒ごとに 1 ダメージ）、1 ダメージ 1 点 → 当てている間 100 点/秒。 */
+const AIR = {
+  r:0.67, speed:7, accel:50, airControl:0.25, g:9.8*3, jumpV:8, abilityV:8, abilityEvery:1,
+  near:7.5, far:25, start:28.8, room:30.7, jumpChance:0.65, profileEvery:[1.5,2],
+  profiles:[ { w:2, lr:[0.35,0.6] }, { w:1, lr:[0.38,0.48], multL:1.6 }, { w:1, lr:[0.38,0.48], multR:1.6 } ]
+};
+function airProfile(){
+  const r = Math.random()*4;
+  return r < 2 ? AIR.profiles[0] : r < 3 ? AIR.profiles[1] : AIR.profiles[2];
+}
 
 definePlaylistTask({
-  id:'air-angelic', name:'Air Angelic 4 Voltaic Easy', jp:'空中の追従', category:'TRACKING', glyph:'trk',
-  tracking:true, accGoal:75, sizeMul:1.1, depth:AIR.z*-1+AIR.zSwing,
-  desc:'空中をなめらかに飛び回る的を追い続ける。向きは弧を描くように少しずつ変わるので、'
-     + '止まらずに曲線で追う。足もとの影で高さと奥行きをつかむ。',
-  center(){ return { x:0, y:AIR.y0, z:AIR.z }; },
+  id:'air-angelic', name:'Air Angelic 4 Voltaic Easy', jp:'跳ねる球の追従', category:'TRACKING', glyph:'trk',
+  tracking:true, holdFire:true, dps:100, perDmg:1, accGoal:70, depth:AIR.room,
+  arena:{ floor:0, x:[-AIR.room, AIR.room], z:[-AIR.room, AIR.room], step:3, ceil:16.3 },
+  desc:'自分の周りを跳ねながら小刻みに左右へ動く球を、撃ちっぱなしで追い続ける。'
+     + '距離 7.5〜25m を保って 360° 回り込むので、後ろへ回られても振り向いて追う。当てている間 100 点/秒。',
+  center(){ return { x:0, y:AIR.r, z:-AIR.start }; },
   spawn(){
-    return newTarget({ x:0, y:AIR.y0, z:AIR.z, heading:Math.random()*Math.PI*2,
-                       turn:0, turnTo:0, turnAt:0, phase:Math.random()*6 });
+    return orbitTarget({ shape:'sphere', r:AIR.r, color:KV_RED, x:0, y:AIR.r, z:-AIR.start,
+                         lift:0, vy:0, vr:0, prof:AIR.profiles[0], profAt:0, abilityAt:0 });
   },
   update(G, dt){
     const t = G.targets[0]; if(!t) return;
-    if(G.elapsed >= t.turnAt){ t.turnTo = rnd(-AIR.turn, AIR.turn); t.turnAt = G.elapsed + rnd(0.35, 0.9); }
-    t.turn += (t.turnTo - t.turn) * Math.min(1, dt*4);          // 曲がり方も急に変えない
-    // 飛べる範囲の端に近づいたら、真ん中のほうへ舵を切る
-    const ex = t.x/AIR.hw, ey = (t.y-AIR.y0)/AIR.hh, r = ex*ex + ey*ey;
-    if(r > AIR.edge) t.heading += wrapAng(Math.atan2(-ey, -ex) - t.heading) * Math.min(1, dt*3*(r-AIR.edge)*4);
-    t.heading += t.turn*dt;
-    t.x = clamp(t.x + Math.cos(t.heading)*AIR.speed*dt, -AIR.hw, AIR.hw);
-    t.y = clamp(t.y + Math.sin(t.heading)*AIR.speed*dt, AIR.y0-AIR.hh, AIR.y0+AIR.hh);
-    t.z = AIR.z + Math.sin(G.elapsed*0.7 + t.phase)*AIR.zSwing;  // 奥行きもゆっくり揺れる
+    const grounded = t.lift <= 0;
+    if(G.elapsed >= t.profAt){ t.prof = airProfile(); t.profAt = G.elapsed + rnd(...AIR.profileEvery); }
+    const flipped = strafeTick(t, G, dt, { speed:AIR.speed, accel:AIR.accel, airControl:AIR.airControl,
+                                           airborne:!grounded, lr:t.prof.lr, multL:t.prof.multL, multR:t.prof.multR });
+    if(grounded){
+      if(flipped && Math.random() < AIR.jumpChance) t.vy = AIR.jumpV;
+      if(G.elapsed >= t.abilityAt){ t.vy += AIR.abilityV; t.abilityAt = G.elapsed + AIR.abilityEvery; }
+    }
+    // 25m より遠ければ近づき、7.5m より近ければ離れる（それ以外は距離を保つ）
+    const want = t.dist > AIR.far ? -AIR.speed : t.dist < AIR.near ? AIR.speed : 0;
+    const a = AIR.accel * (grounded ? 1 : AIR.airControl) * dt;
+    t.vr += clamp(want - t.vr, -a, a);
+    t.dist = clamp(t.dist + t.vr*dt, 2, AIR.room*1.35);
+    placeOrbit(t);
+    // 部屋の壁に当たったら跳ね返す
+    const lim = AIR.room - AIR.r;
+    if(Math.abs(t.x) > lim || Math.abs(t.z) > lim){
+      t.x = clamp(t.x, -lim, lim); t.z = clamp(t.z, -lim, lim);
+      t.dist = Math.hypot(t.x, t.z); t.ang = Math.atan2(t.x, -t.z);
+      t.v = 0; t.lrAt = Math.min(t.lrAt, G.elapsed + 0.15);
+    }
+    t.vy -= AIR.g*dt; t.lift += t.vy*dt;
+    if(t.lift <= 0){ t.lift = 0; t.vy = 0; }
+    t.y = AIR.r + t.lift;
   },
-  drawDecor(){ drawFloorShadow(liveTargets(G)[0], 0.32); }
+  drawDecor(){ drawFloorShadow(liveTargets(G)[0], AIR.r*0.9, 0.01); }
 });
 
 /* ── Centering 90 Easy No Strafes ──
-   正面 90° の弧の上を、的が一定の速さで行ったり来たりする。自分は動かない。
-   弧は自分を中心にした円なので、どこにいても的までの距離は同じ。 */
-const CEN = { r:10, half:45*DEG, speed:34*DEG };
+   本家: 約 18m 先、正面 ±45° ほどの壁に挟まれた弧の上を、細く背の高い柱
+   （半径 20cm・高さ 3.2m）が 7m/s（加速 90m/s²）で動く。向きは 60 秒変わらず、
+   壁に当たると 0.1 秒で折り返す。無敵。自分は動かない。
+   武器は撃ちっぱなし（0.046 秒ごとに 6 ダメージ）、1 ダメージ 3 点 → 当てている間 約 391 点/秒。 */
+const CEN = { dist:18.2, half:44*DEG, speed:7, accel:90, react:0.1, poleR:0.2, poleH:3.2,
+              spawns:[-42.9*DEG, 0, 43*DEG] };
 
 definePlaylistTask({
   id:'centering-90', name:'Centering 90 Easy No Strafes', jp:'90°のセンタリング', category:'TRACKING', glyph:'lr',
-  tracking:true, accGoal:85, sizeMul:1.1,
-  desc:'正面 90° の弧を、的が一定の速さで左右に行ったり来たりする（自分は動かない）。'
-     + '端で折り返す瞬間に遅れず、クロスヘアを的の真ん中に置き続ける。なめらかさの練習。',
-  center(){ return { x:0, y:EYE, z:-CEN.r }; },
-  spawn(){ return newTarget({ x:0, y:EYE, z:-CEN.r, ang:0, dir:Math.random()<0.5 ? 1 : -1 }); },
+  tracking:true, holdFire:true, dps:6/0.046, perDmg:3, accGoal:85, depth:CEN.dist,
+  arena:{ floor:0, x:[-14,14], z:[-20,0], step:2 },
+  desc:'18m 先、正面 90° の弧を細い柱が 7m/s で行ったり来たりする（壁に当たると折り返す）。'
+     + '撃ちっぱなしで、柱の真ん中にクロスヘアを置き続ける。なめらかさの練習。',
+  center(){ return { x:0, y:EYE, z:-CEN.dist }; },
+  spawn(){
+    return orbitTarget({ shape:'pole', r:CEN.poleR, h:CEN.poleH, color:KV_DARKRED,
+                         dist:CEN.dist, ang:pick(CEN.spawns), y:CEN.poleH/2, lrAt:1e9 });
+  },
   update(G, dt){
     const t = G.targets[0]; if(!t) return;
-    t.ang += t.dir*CEN.speed*dt;
-    if(Math.abs(t.ang) >= CEN.half){ t.ang = Math.sign(t.ang)*CEN.half; t.dir = -t.dir; }
-    t.x = CEN.r*Math.sin(t.ang); t.z = -CEN.r*Math.cos(t.ang);
+    if(!t.dir) t.dir = Math.random() < 0.5 ? 1 : -1;
+    // 60 秒は向きを変えないので、折り返すのは壁に当たったときだけ
+    if(t.lrAt === 1e9) t.lrAt = G.elapsed + 60;
+    strafeTick(t, G, dt, { speed:CEN.speed, accel:CEN.accel, lr:[60,60], angLim:CEN.half, react:CEN.react });
   },
-  // 走る弧と、折り返す両端を床に描く
+  // 走る弧と、両側の壁
   drawDecor(){
     const n = 24;
     for(let i=0;i<n;i++){
       const a0 = -CEN.half + 2*CEN.half*i/n, a1 = -CEN.half + 2*CEN.half*(i+1)/n;
-      seg3D({x:CEN.r*Math.sin(a0),y:0,z:-CEN.r*Math.cos(a0)},
-            {x:CEN.r*Math.sin(a1),y:0,z:-CEN.r*Math.cos(a1)}, THEME.floor, 0.6);
+      seg3D({x:CEN.dist*Math.sin(a0),y:0,z:-CEN.dist*Math.cos(a0)},
+            {x:CEN.dist*Math.sin(a1),y:0,z:-CEN.dist*Math.cos(a1)}, THEME.floor, 0.6);
     }
     for(const s of [1,-1]){
-      const x = CEN.r*Math.sin(s*CEN.half), z = -CEN.r*Math.cos(s*CEN.half);
-      seg3D({x,y:0,z},{x,y:EYE+1.2,z}, THEME.corner, 0.5, 1.5);
+      const a = s*(CEN.half + CEN.poleR/CEN.dist);
+      const p0 = { x:9*Math.sin(a), z:-9*Math.cos(a) }, p1 = { x:24*Math.sin(a), z:-24*Math.cos(a) };
+      fillPoly3D([{x:p0.x,y:0,z:p0.z},{x:p1.x,y:0,z:p1.z},{x:p1.x,y:5,z:p1.z},{x:p0.x,y:5,z:p0.z}], THEME.flank, THEME.edge, 1);
     }
   }
 });
 
 /* ── waldoTS ──
-   狭い範囲で小刻みに動く小さな的を、追って削り切っては次へ切り替える
-   （マイクロのターゲットスイッチ）。乗せ続けた時間で体力が減って倒れる。 */
-const WALDO = { z:-10, hw:2.3, hh:0.95, speed:[1.3,2.5], hp:450, gap:0.9 };
+   本家: 球（半径 50cm・体力 120）が 3 体。40.6〜73.9m 先・左右 ±7.7m・
+   高さ −3.6〜+11.8m の箱の中に出る（ほかの的から 5m 以上離す）。
+   3m/s で左右に動き、3〜5 秒ごとに向きを変える。倒すとすぐ別の場所に出る。
+   武器は撃ちっぱなし（0.01 秒ごとに 5 ダメージ）→ 0.24 秒当て続けると倒れる。1 ダメージ 0.01 点。 */
+const WALDO = { n:3, r:0.5, hp:120, speed:3, lr:[3,5], gap:5,
+                right:[-7.68,7.68], up:[-3.56,11.8], fwd:[40.64,73.92], wall:40 };
 
 definePlaylistTask({
-  id:'waldots', name:'waldoTS', jp:'小さな的の切り替え', category:'SWITCHING', glyph:'trk',
-  tracking:true, trackKills:true, fixedConcurrent:3, accGoal:70, sizeMul:0.55,
-  desc:'狭い範囲で小刻みに動く小さな的 3 体を、1 体ずつ追って倒しては次へ切り替える。'
-     + '乗せ続けると約 0.45 秒で倒れる。切り替えの距離が短いので、腕ではなく指先と手首の小さな動きで。',
-  center(){ return { x:0, y:EYE, z:WALDO.z }; },
+  id:'waldots', name:'waldoTS', jp:'遠くの3体を切り替え', category:'SWITCHING', glyph:'trk',
+  tracking:true, holdFire:true, trackKills:true, dps:500, perDmg:0.01, fixedConcurrent:WALDO.n,
+  accGoal:60, depth:WALDO.fwd[1],
+  arena:{ floor:EYE-38.4, x:[-40,40], z:[-80,10], step:5 },
+  desc:'40〜74m 先の広い範囲にいる球 3 体を、撃ちっぱなしで 1 体ずつ削り切っては次へ切り替える。'
+     + '0.24 秒当て続けると倒れる。的は 3m/s で左右に動き、3〜5 秒ごとに向きを変える。',
+  center(){ return { x:0, y:EYE+(WALDO.up[0]+WALDO.up[1])/2, z:-(WALDO.fwd[0]+WALDO.fwd[1])/2 }; },
   spawn(G){
-    // ほかの的と重ならない場所を探す（見つからなければ最後の候補で妥協する）
     const others = liveTargets(G);
-    let x=0, y=EYE;
-    for(let k=0;k<12;k++){
-      x = rnd(-WALDO.hw, WALDO.hw); y = EYE + rnd(-WALDO.hh, WALDO.hh);
-      if(others.every(o => Math.hypot(o.x-x, o.y-y) >= WALDO.gap)) break;
+    let x=0, y=EYE, z=-50;
+    for(let k=0;k<16;k++){
+      x = rnd(...WALDO.right); y = EYE + rnd(...WALDO.up); z = -rnd(...WALDO.fwd);
+      if(others.every(o => Math.hypot(o.x-x, o.y-y, o.z-z) >= WALDO.gap)) break;
     }
-    return newTarget({ x, y, z:WALDO.z, hp:WALDO.hp, vx:0, vy:0, turnAt:0 });
+    return orbitTarget({ shape:'sphere', r:WALDO.r, color:KV_RED, x, y, z, hp:WALDO.hp, maxHp:WALDO.hp });
   },
   update(G, dt){
     for(const t of G.targets){
       if(t.dead) continue;
-      if(G.elapsed >= t.turnAt){                 // 向きと速さを小刻みに変える
-        const a = Math.random()*Math.PI*2, v = rnd(WALDO.speed[0], WALDO.speed[1]);
-        t.vx = Math.cos(a)*v; t.vy = Math.sin(a)*v*0.6;
-        t.turnAt = G.elapsed + rnd(0.22, 0.65);
-      }
-      t.x += t.vx*dt; t.y += t.vy*dt;
-      if(Math.abs(t.x) > WALDO.hw){ t.x = Math.sign(t.x)*WALDO.hw; t.vx = -t.vx; }
-      if(Math.abs(t.y-EYE) > WALDO.hh){ t.y = EYE + Math.sign(t.y-EYE)*WALDO.hh; t.vy = -t.vy; }
+      strafeTick(t, G, dt, { speed:WALDO.speed, lr:WALDO.lr, angLim:Math.atan2(WALDO.wall, t.dist), react:0.001 });
     }
   }
 });
 
 /* ── eth FP OGG Micro 60 ──
-   小さな的が1体ずつ、正面の「四角の上の点」と「円の上の点」に交互に出る。
-   作者の修正メモ「いつも四角→円の順に回るのが正しい遊び方」に合わせている。 */
-const OGG = { z:-10, sq:1.15, ci:0.8 };
-const OGG_SQUARE = [[-1,-1],[0,-1],[1,-1],[1,0],[1,1],[0,1],[-1,1],[-1,0]]
-  .map(([x,y]) => ({ x:x*OGG.sq, y:y*OGG.sq*0.75 }));
-const OGG_CIRCLE = Array.from({length:8}, (_,i) => {
-  const a = (i+0.5)/8*Math.PI*2;
-  return { x:Math.cos(a)*OGG.ci, y:Math.sin(a)*OGG.ci*0.75 };
-});
+   本家: 2 種類の的を交互に撃つ（作者「いつも 四角→円 の順に回すのが正しい遊び方」）。
+   四角（64×66cm）: 53.75m 先の真ん中に出て、こちらへ加速して迫ってくる（81m/s²）。
+     20.6m まで来ると消えて（向こうへ飛ばされて）また奥に出る。出るまでの間は 0〜0.2 秒。
+   円（半径 24cm）: 53m 先、真ん中の周りの 8 か所 ±80cm に出る。動かない。倒すと 0.033 秒後に別の所へ。
+   1 発で倒れる。1 体 100 点。60 秒。部屋は幅 13m・高さ 13m・奥行き 54m の細長い箱。 */
+const OGG = {
+  cube:{ w:0.64, h:0.66, fwd:53.75, up:-0.38, accel:81.2, vmax:80, vanish:20.6, wait:[0,0.2] },
+  ball:{ r:0.24, fwd:53.06, jitter:0.8, respawn:0.033,
+         pts:[[0,-1.75],[-2.19,-0.56],[2.19,-0.56],[0,1.13],[-1.69,-1.75],[1.69,-1.75],[-1.69,1.13],[1.69,1.13]] },
+  room:{ half:6.5, floor:EYE-6.24, ceil:EYE+6.76 }
+};
 
 definePlaylistTask({
-  id:'eth-ogg-micro', name:'eth FP OGG Micro 60', jp:'四角と円のマイクロ', category:'PRECISION', glyph:'dot',
-  sizeMul:0.5,
-  desc:'小さな的が1体ずつ、正面の四角の上の点と円の上の点に交互に出る。'
-     + '次の点は近いので、大きく振らずに短く正確に合わせて撃つ。',
-  center(){ return { x:0, y:EYE, z:OGG.z }; },
+  id:'eth-ogg-micro', name:'eth FP OGG Micro 60', jp:'迫る四角と止まった円', category:'PRECISION', glyph:'dot',
+  fixedConcurrent:2, accGoal:90, fireCooldown:0.1, conLabel:2, depth:OGG.cube.fwd,
+  arena:{ floor:OGG.room.floor, x:[-OGG.room.half, OGG.room.half], z:[-OGG.cube.fwd-0.5, 0], step:2, ceil:OGG.room.ceil },
+  desc:'奥から迫ってくる四角と、その周りに止まっている小さな円を、四角 → 円 → 四角 … の順に撃つ。'
+     + '四角は約 0.9 秒で近くまで来て消え、また奥から出てくる。1 発で倒れる。1 体 100 点。',
+  scoreOnHit:()=>100,
+  center(){ return { x:0, y:EYE+OGG.cube.up, z:-OGG.cube.fwd }; },
+  onHit(G, t){ if(t.kind === 'ball') G.ts.ballAt = G.elapsed + OGG.ball.respawn; },
   spawn(G){
-    const s = G.ts;
-    s.n = (s.n||0) + 1;
-    const ring = s.n % 2 ? OGG_SQUARE : OGG_CIRCLE;    // 四角 → 円 → 四角 …
-    let i;
-    do{ i = (Math.random()*ring.length)|0; }while(ring === s.ring && i === s.i);
-    s.ring = ring; s.i = i;
-    return newTarget({ x:ring[i].x, y:EYE+ring[i].y, z:OGG.z });
-  },
-  // 的が出る点を薄く示しておく（四角と円の形が見えると回り方を覚えやすい）
-  drawDecor(){
-    const z = OGG.z - 0.05;
-    for(const ring of [OGG_SQUARE, OGG_CIRCLE])
-      for(let i=0;i<ring.length;i++){
-        const a = ring[i], b = ring[(i+1)%ring.length];
-        seg3D({x:a.x,y:EYE+a.y,z},{x:b.x,y:EYE+b.y,z}, THEME.floorDim, 0.45);
-      }
-  }
-});
-
-/* ── Amare Dynamic TAF Micro ──
-   真ん中にいつも出る的を撃ち、少し遅れてすぐ近くに出る2体目まで一息で撃つ。
-   2体目は大きさがばらばらで、ゆっくり動く（Dynamic）。 */
-const TAF = { z:-10, near:0.55, far:1.5, delay:[0.12,0.3], drift:[0.35,1.0], scale:[0.45,0.95] };
-
-definePlaylistTask({
-  id:'amare-taf-micro', name:'Amare Dynamic TAF Micro', jp:'真ん中から一息で2体', category:'PRECISION', glyph:'dot',
-  sizeMul:0.6, conLabel:2,
-  desc:'真ん中にいつも出る的に合わせて待ち、すぐ近くに2体目が出たら2体とも一息で撃つ。'
-     + '2体目は大きさがばらばらで、ゆっくり動く。毎回同じリズムで撃てるように。',
-  center(){ return { x:0, y:EYE, z:TAF.z }; },
-  spawn(G){
-    if(liveTargets(G).length || G.ts.secondAt) return null;   // 2体とも倒れたら次の組
-    G.ts.secondAt = G.elapsed + rnd(TAF.delay[0], TAF.delay[1]);
-    return newTarget({ x:0, y:EYE, z:TAF.z });
+    const live = liveTargets(G);
+    if(!live.some(t => t.kind === 'cube')) return newCube(G);
+    if(!live.some(t => t.kind === 'ball') && !G.ts.ballAt) return newBall();
+    return null;
   },
   update(G, dt){
-    if(G.ts.secondAt && G.elapsed >= G.ts.secondAt){
-      G.ts.secondAt = 0;
-      const a = Math.random()*Math.PI*2, d = rnd(TAF.near, TAF.far);
-      const m = Math.random()*Math.PI*2, v = rnd(TAF.drift[0], TAF.drift[1]);
-      G.targets.push(newTarget({ x:Math.cos(a)*d, y:EYE + Math.sin(a)*d*0.7, z:TAF.z,
-                                 scale:rnd(TAF.scale[0], TAF.scale[1]),
-                                 vx:Math.cos(m)*v, vy:Math.sin(m)*v }));
+    if(G.ts.ballAt && G.elapsed >= G.ts.ballAt){ G.ts.ballAt = 0; G.targets.push(newBall()); }
+    for(let i=G.targets.length-1; i>=0; i--){
+      const t = G.targets[i];
+      if(t.dead || t.kind !== 'cube' || G.elapsed < t.goAt) continue;
+      t.vz = Math.min(OGG.cube.vmax, t.vz + OGG.cube.accel*dt);
+      t.z += t.vz*dt;
+      if(-t.z <= OGG.cube.vanish){ G.targets.splice(i,1); G.targets.push(newCube(G)); }   // 撃ちそこねた
     }
-    for(const t of G.targets){ if(!t.dead && t.vy != null){ t.x += t.vx*dt; t.y += t.vy*dt; } }
   }
 });
+function newCube(G){
+  return newTarget({ kind:'cube', shape:'box', w:OGG.cube.w, h:OGG.cube.h, color:'#FF1A1A',
+                     x:0, y:EYE+OGG.cube.up, z:-OGG.cube.fwd, vz:0, goAt:G.elapsed + rnd(...OGG.cube.wait) });
+}
+function newBall(){
+  const [r,u] = pick(OGG.ball.pts), j = OGG.ball.jitter;
+  return newTarget({ kind:'ball', shape:'sphere', r:OGG.ball.r, color:KV_RED,
+                     x:r + rnd(-j,j), y:EYE + u + rnd(-j,j), z:-OGG.ball.fwd });
+}
 
-/* ── eth Valorant Layered Control v3 40s ──
-   近・中・遠の3つの層に、VALORANT の撃ち合いのように左右へ小刻みに動いては
-   止まる的が出る（ADAD とカウンターストレイフ）。倒すたびに別の層へ移る。 */
-const LAYER = { z:[-8,-13,-19], span:[2.4,3.4,4.6], speed:VAL_SPEED.run*0.75 };
+/* ── Amare Dynamic TAF Micro ──
+   本家（説明文）:「ポケボールに合わせて、もう 1 つの的が出るのを待つ。2 つを一息で倒す。
+   ポケボールはいつも真ん中に出る」。30 秒。外すと −2 点、1 体 10 点。
+   ポケボール（半径 60cm）: 87m 先、真ん中の 5×5 の格子（1.2m おき）に出て、1.2m/s でゆっくり
+     左右に動く（1〜3 秒で向きを変える）。倒すとすぐ別の格子に出る。
+   もう 1 つ（半径 40cm）: 90.5m 先、15×15 の格子のうち真ん中を除いた 169 か所に出て、
+     5.2m/s で左右に動く（0.75〜2 秒で向きを変える）。倒すと 0.25 秒後に出る。 */
+const TAF_OTHER_R = [-8.4,-7.12,-6,-4.72,-3.6,-2.32,-1.2,-0.08,1.2,2.32,3.6,4.72,6,7.12,8.4];
+const TAF_OTHER_U = [-8.4,-7.28,-6.16,-5.04,-3.92,-2.8,-1.68,-0.24,0.88,2,3.12,4.4,5.52,6.64,7.76];
+const TAF = {
+  poke:{ r:0.6, fwd:87.12, speed:1.2, lr:[1,3],
+         pts:[-2.4,-1.2,0,1.2,2.4].flatMap(r => [-2.72,-1.52,-0.32,0.88,2.08].map(u => [r,u])) },
+  other:{ r:0.4, fwd:90.48, speed:5.2, lr:[0.75,2], respawn:0.25,
+          pts:TAF_OTHER_R.flatMap(r => TAF_OTHER_U.map(u => [r,u]))
+                         .filter(([r,u]) => !(Math.abs(r) <= 3.6 && u >= -5.04 && u <= 3.12)) }
+};
 
 definePlaylistTask({
-  id:'eth-layered', name:'eth Valorant Layered Control v3 40s', jp:'近・中・遠の撃ち合い', category:'FLICKING', glyph:'lr',
-  fixedDuration:40, sizeMul:0.95, depth:19,
-  desc:'近・中・遠の3つの距離に、左右へ小刻みに動いては止まる的が1体ずつ出る。'
-     + '倒すたびに別の距離へ移るので、距離ごとに合わせる量を変えて、止まった瞬間を撃つ。',
-  center(){ return { x:0, y:EYE, z:LAYER.z[1] }; },
+  id:'amare-taf-micro', name:'Amare Dynamic TAF Micro', jp:'ポケボールと2つ目', category:'PRECISION', glyph:'dot',
+  fixedDuration:30, fixedConcurrent:2, accGoal:90, missPenalty:2, fireCooldown:0.1, conLabel:2,
+  depth:TAF.other.fwd, arena:{ floor:EYE-10.5, x:[-12,12], z:[-92,0], step:4 },
+  desc:'87m 先の真ん中にいつもいるポケボールに合わせて待ち、周りにもう 1 つの的が出たら、2 つを一息で撃つ。'
+     + '倒した的は 0.25 秒後にまた出る。1 体 10 点、外すと −2 点。30 秒。',
+  scoreOnHit:()=>10,
+  center(){ return { x:0, y:EYE-0.32, z:-TAF.poke.fwd }; },
+  onHit(G, t){ if(t.kind === 'other') G.ts.otherAt = G.elapsed + TAF.other.respawn; },
   spawn(G){
-    const s = G.ts;
-    let l;
-    do{ l = (Math.random()*3)|0; }while(l === s.layer);
-    s.layer = l;
-    return newTarget({ x:rnd(-LAYER.span[l], LAYER.span[l]), y:EYE, z:LAYER.z[l], layer:l,
-                       vx:0, goal:0, legAt:0 });
+    const live = liveTargets(G);
+    if(!live.some(t => t.kind === 'poke')) return tafTarget('poke');
+    if(!live.some(t => t.kind === 'other') && !G.ts.otherAt) return tafTarget('other');
+    return null;
+  },
+  update(G, dt){
+    if(G.ts.otherAt && G.elapsed >= G.ts.otherAt){ G.ts.otherAt = 0; G.targets.push(tafTarget('other')); }
+    for(const t of G.targets){
+      if(t.dead) continue;
+      const o = TAF[t.kind];
+      strafeTick(t, G, dt, { speed:o.speed, lr:o.lr, angLim:Math.atan2(12, t.dist) });
+    }
+  }
+});
+function tafTarget(kind){
+  const o = TAF[kind], [r,u] = pick(o.pts);
+  return orbitTarget({ kind, shape:'sphere', r:o.r, color:KV_RED, style:kind === 'poke' ? 'pokeball' : null,
+                       x:r, y:EYE+u, z:-o.fwd });
+}
+
+/* ── eth Valorant Layered Control v3 40s ──
+   本家（説明文）:「できるだけ多く倒せ！コントロールの練習」。追従（Tracking）のタスクで、長さは 48 秒。
+   44.8 / 57.3 / 74.8 / 90.8m の 4 つの層に、左右 ±6m（2m おき）× 上下 ±8m（4m おき）の
+   140 か所の出る場所がある。球（半径 55cm）・体力 90・当てていないと 0.1 秒後から毎秒 75 回復。
+   5.1m/s で左右に小刻みに動く（0.3〜0.9 秒で向きを変える）。倒すとすぐ別の場所に出る。
+   武器は撃ちっぱなし（0.01 秒ごとに 1 ダメージ）。1 ダメージ 0.1 点、1 体 15 点。 */
+const LAYER = { fwd:[44.8,57.3,74.8,90.8], right:[-6,-4,-2,0,2,4,6], up:[-8,-4,0,4,8],
+                r:0.55, hp:90, regen:75, regenDelay:0.1, speed:5.1, lr:[0.3,0.9], wall:20 };
+const LAYER_PTS = LAYER.fwd.flatMap(f => LAYER.right.flatMap(r => LAYER.up.map(u => [r,u,f])));
+
+definePlaylistTask({
+  id:'eth-layered', name:'eth Valorant Layered Control v3 40s', jp:'4層の削り切り', category:'TRACKING', glyph:'trk',
+  fixedDuration:48, tracking:true, holdFire:true, trackKills:true,
+  dps:100, perDmg:0.1, perKill:15, regen:LAYER.regen, regenDelay:LAYER.regenDelay,
+  accGoal:60, depth:LAYER.fwd[3], arena:{ floor:EYE-48, x:[-24,24], z:[-96,0], step:6 },
+  desc:'45〜91m の 4 つの距離のどこかに出る球を、撃ちっぱなしで削り切る。当てるのをやめるとすぐ回復するので、'
+     + '小刻みに左右へ動く的に乗せ続ける。1 体 15 点＋削った分。48 秒。',
+  center(){ return { x:0, y:EYE, z:-LAYER.fwd[1] }; },
+  spawn(){
+    const [r,u,f] = pick(LAYER_PTS);
+    return orbitTarget({ shape:'sphere', r:LAYER.r, color:KV_DARKRED, x:r, y:EYE+u, z:-f,
+                         hp:LAYER.hp, maxHp:LAYER.hp });
   },
   update(G, dt){
     for(const t of G.targets){
-      if(t.dead || t.layer == null) continue;
-      if(G.elapsed >= t.legAt){
-        // 動く → 止まる を繰り返す。止まるときは短め（カウンターストレイフ）
-        if(t.goal){ t.goal = 0; t.legAt = G.elapsed + rnd(0.08, 0.28); }
-        else{
-          const span = LAYER.span[t.layer];
-          let dir = Math.random() < 0.5 ? 1 : -1;
-          if(Math.abs(t.x) > span*0.7) dir = -Math.sign(t.x);    // 端にいたら内側へ
-          t.goal = dir*LAYER.speed; t.legAt = G.elapsed + rnd(0.18, 0.55);
-        }
-      }
-      t.vx += (t.goal - t.vx) * Math.min(1, dt*22);              // VALORANT はほぼすぐ最高速になる
-      t.x = clamp(t.x + t.vx*dt, -LAYER.span[t.layer], LAYER.span[t.layer]);
+      if(t.dead) continue;
+      strafeTick(t, G, dt, { speed:LAYER.speed, lr:LAYER.lr, angLim:Math.atan2(LAYER.wall, t.dist) });
     }
-  },
-  // 3つの層の床に線を引いて、どの距離か分かるようにする
-  drawDecor(){
-    LAYER.z.forEach((z,i) => seg3D({x:-LAYER.span[i]-0.6,y:0,z},{x:LAYER.span[i]+0.6,y:0,z}, THEME.floor, 0.55, 1.5));
   }
 });
 
 /* ── Valorant Fireworks Flick Horizontal - Far ──
-   遠くの真ん中の的を撃つと、そこから花火のように左右へ的がはじけて広がる。
-   全部倒すとまた真ん中に出る。 */
-const FW = { z:-20, n:4, k:3.2, start:0.7 };
+   本家: 20.9m 先に柱が 3 本（左右 6.36m おき・太さ 約 1.9m）。人型の的（高さ 170cm）が 2 体、
+   真ん中の柱の陰（23m 先）から左右どちらかへ 6.5m/s で走り出し、横の柱の陰（左右 7.16m）まで行く。
+   着いたあとも左右に走り続け、部屋の壁（左右 26m）で折り返す。
+   頭（上から 40cm）にしか当たらない。武器は単発（0.19 秒おき）で、頭に当たれば 1 発で倒れる。
+   倒すとすぐまた真ん中の柱の陰から出る。1 体 10 点。60 秒。 */
+const FW = { pillarFwd:20.9, pillars:[-6.36,0,6.36], pillarR:0.94, pillarH:5.9,
+             spawnFwd:23.07, path:7.16, speed:6.5, wall:26, botH:1.7, head:0.4 };
 
 definePlaylistTask({
-  id:'fireworks-far', name:'Valorant Fireworks Flick Horizontal - Far', jp:'花火のフリック・遠距離', category:'FLICKING', glyph:'grid',
-  sizeMul:0.8, conLabel:'1+4', depth:FW.z*-1,
-  desc:'遠くの真ん中の的を撃つと、そこから左右へ花火のように的がはじけて広がる。'
-     + '広がっている途中でも止まってからでもいいので、横へのフリックで全部倒す。',
-  center(){ return { x:0, y:EYE, z:FW.z }; },
-  onHit(G, t){ G.ts.last = t.kind; },
-  spawn(G){
-    if(liveTargets(G).length) return null;                 // 全部倒すまで次を出さない
-    if(G.ts.last !== 'center') return newTarget({ x:0, y:EYE, z:FW.z, kind:'center' });
-    // 左右に2体ずつ、近い所と遠い所へ広がる。重なって出ないよう少しずらして出す
-    const out = [];
-    for(const side of [1,-1]){
-      for(const reach of [rnd(2.5,4.5), rnd(5.5,8.5)]){
-        const dy = rnd(-0.45, 0.45);
-        out.push(newTarget({ x:side*FW.start, y:EYE, z:FW.z, kind:'burst',
-                             vx:side*(reach-FW.start)*FW.k, vy:dy*FW.k }));
-      }
-    }
-    return out;
+  id:'fireworks-far', name:'Valorant Fireworks Flick Horizontal - Far', jp:'柱の陰から左右へ', category:'FLICKING', glyph:'lr',
+  fixedConcurrent:2, accGoal:80, fireCooldown:0.19, noTally:false, depth:FW.spawnFwd, conLabel:2,
+  arena:{ floor:0, x:[-FW.wall, FW.wall], z:[-32, 0], step:2, ceil:FW.pillarH },
+  occluders:FW.pillars.map(x => ({ x, z:-FW.pillarFwd, r:FW.pillarR, y0:0, y1:FW.pillarH })),
+  desc:'正面の 3 本の柱のうち、真ん中の柱の陰から的が左右へ走り出る。横の柱に隠れる前に、頭を撃ち抜く。'
+     + '頭にしか当たらず、連射は 0.19 秒おき。1 体 10 点。',
+  scoreOnHit:()=>10,
+  center(){ return { x:0, y:EYE, z:-FW.spawnFwd }; },
+  spawn(){
+    const side = Math.random() < 0.5 ? 1 : -1;
+    return newTarget({ x:0, y:FW.botH/2, z:-FW.spawnFwd, hgt:FW.botH, headOnly:FW.head/FW.botH,
+                       vx:side*FW.speed, goal:side*FW.path, turnAt:0 });
   },
   update(G, dt){
-    const decay = Math.exp(-FW.k*dt);                      // はじけた勢いがだんだん落ちて止まる
     for(const t of G.targets){
-      if(t.dead || t.kind !== 'burst') continue;
-      t.x += t.vx*dt; t.y += t.vy*dt;
-      t.vx *= decay; t.vy *= decay;
+      if(t.dead) continue;
+      if(t.goal != null && Math.abs(t.x) >= Math.abs(t.goal)){
+        t.goal = null;                                         // 横の柱に着いた → あとは左右に走り続ける
+        if(Math.random() < 0.5) t.vx = -t.vx;
+      }
+      if(t.turnAt && G.elapsed >= t.turnAt){ t.turnAt = 0; t.vx = -t.vx; }
+      t.x += t.vx*dt;
+      const lim = FW.wall - 0.3;
+      if(Math.abs(t.x) > lim){ t.x = Math.sign(t.x)*lim; if(!t.turnAt) t.turnAt = G.elapsed + 0.15; }
     }
-  }
+  },
+  drawOverlay(){ for(const o of task.occluders) drawPillar(o); }
 });
+
+/* 柱。的より後に描いて、陰にいる的を隠す。 */
+function drawPillar(o){
+  const c0 = toCam({ x:o.x, y:o.y0, z:o.z }), c1 = toCam({ x:o.x, y:o.y1, z:o.z });
+  if(c0.z > -0.3 || c1.z > -0.3) return;
+  const p0 = project(c0), p1 = project(c1);
+  const w0 = f*o.r/p0.d, w1 = f*o.r/p1.d;
+  ctx.beginPath();
+  ctx.moveTo(p0.x-w0, p0.y); ctx.lineTo(p0.x+w0, p0.y); ctx.lineTo(p1.x+w1, p1.y); ctx.lineTo(p1.x-w1, p1.y);
+  ctx.closePath();
+  const g = ctx.createLinearGradient(p0.x-w0, 0, p0.x+w0, 0);
+  g.addColorStop(0, THEME.flank); g.addColorStop(0.45, THEME.stone); g.addColorStop(1, THEME.flank);
+  ctx.fillStyle = g; ctx.fill();
+  ctx.strokeStyle = THEME.edge; ctx.lineWidth = 1; ctx.stroke();
+}
 
 /* ── プレイリストの進み具合 ──
    その日に何回遊んだかを数える。日付が変わったら 0 に戻る（毎日のメニューとして使う）。 */
@@ -1415,7 +1529,6 @@ const DEFAULTS = {
        scale:1 }
 };
 const VAL_COLORS = ['#FFFFFF','#00FF00','#7FFF00','#DEFF00','#FFFF00','#00FFFF','#FF00FF','#FF0000'];
-const EYE = 1.6;                       // 視点の高さ (m)
 const VFOV = 2*Math.atan(Math.tan(103*DEG/2)*9/16);  // = 70.53° / VALORANT 相当
 
 /* 保存された設定が壊れていたら既定値に戻す。
@@ -1739,7 +1852,11 @@ function charId(i){
 }
 
 // t.scale を持つ的（大きさがばらつくタスク）は、その的だけ大きさを変える
-function targetHeight(t){ return S.targetSize * (task.sizeMul||1) * ((t && t.scale) || 1); }
+// 高さ（t.hgt メートル）が決まっている的（本家の人型の的など）はその高さで出す
+function targetHeight(t){
+  if(t && t.hgt) return t.hgt;
+  return S.targetSize * (task.sizeMul||1) * ((t && t.scale) || 1);
+}
 
 // 1回の長さ。プレイリストのタスクは本家と同じ長さに固定する
 function runDur(){ return task.fixedDuration || S.duration; }
@@ -1797,6 +1914,7 @@ function resetRun(){
   G.trackMs = G.scoredSteps = G.streakMs = G.bestStreak = G.offMs = 0;
   G.pop = null;
   G.ts = {};                                  // タスクごとの途中の状態（1回ごとに空に戻す）
+  G.firing = false; G.lastShotAt = 0;
   aimAtGridCenter();
   const n = task.fixedConcurrent || Math.min(S.concurrent, G.cells.length);
   for(let i=0;i<n;i++) spawn();
@@ -1854,7 +1972,7 @@ function endRun(){
 
   $('#rTask').textContent = task.name;
   $('#rDur').textContent  = runDur()+'s';
-  $('#rScore').textContent= G.score.toLocaleString();
+  $('#rScore').textContent= fmtScore(G.score);
   $('#rAcc').textContent  = acc.toFixed(1)+'%';
   setGoal($('#rAccGoal'), (trk || G.shots) ? acc : null);
   // タスクの種類に合わせて指標そのものを差し替える
@@ -1871,17 +1989,17 @@ function endRun(){
     $('#rKps').textContent  = kps.toFixed(2);
     $('#rTtk').textContent  = ttk ? Math.round(ttk)+' ms' : '—';
   }
-  $('#rPb').textContent   = (BEST[task.id]?.score||0).toLocaleString();
+  $('#rPb').textContent   = fmtScore(BEST[task.id]?.score||0);
   $('#rPbWrap').classList.toggle('new', isPb);
   $('#rPbLabel').textContent = isPb ? 'New Personal Best' : 'Personal Best';
 
   // 前回スコアと差分
   const prevEl = $('#rPrev'), dEl = $('#rDelta');
-  prevEl.textContent = prev ? prev.score.toLocaleString() : '—';
+  prevEl.textContent = prev ? fmtScore(prev.score) : '—';
   if(prev){
-    const d = G.score - prev.score;
+    const d = Math.round((G.score - prev.score)*10)/10;
     dEl.className = 'delta ' + (d>0 ? 'up' : d<0 ? 'down' : 'same');
-    dEl.textContent = d>0 ? '+'+d.toLocaleString() : d<0 ? '−'+Math.abs(d).toLocaleString() : '±0';
+    dEl.textContent = d>0 ? '+'+fmtScore(d) : d<0 ? '−'+fmtScore(Math.abs(d)) : '±0';
   }else{
     dEl.className = 'delta hidden';
     dEl.textContent = '';
@@ -1911,7 +2029,7 @@ function renderTally(prev){
   const trk = !!task.tracking;
   const vals = trk ? G.trackBy.map(ms=>ms/1000) : G.killsBy;
   const n = vals.length;
-  if(!CHARACTER_SPRITES.length || n < 1){ return; }
+  if(!CHARACTER_SPRITES.length || n < 1 || task.noTally){ return; }   // 球などの的はキャラ別に分けない
   const top = Math.max(1e-6, ...vals);
   el.insertAdjacentHTML('beforeend',
     '<div class="head">' + (trk ? 'Time on target' : 'Kills by target') + '</div>');
@@ -1944,7 +2062,7 @@ function renderTally(prev){
     const p = document.createElement('span');
     p.className = 'pts';
     const now = document.createElement('span');
-    now.textContent = pts.toLocaleString();
+    now.textContent = fmtScore(pts);
     p.appendChild(now);
     const prevArr = trk ? (prev && prev.trackBy) : (prev && prev.killsBy);
     if(prevArr){
@@ -1972,39 +2090,85 @@ function toMenu(){
 function targetUnderCrosshair(){
   const [AX, AY] = aimPt();
   let best=null;
+  const block = occluderDistance();
   for(const t of G.targets){
     if(t.dead) continue;
-    const sp = spriteOf(t); if(!sp) continue;
     const c = toCam(t); if(c.z > -0.2) continue;
     const p = project(c);
-    const sh = f*targetHeight(t)*sp.hScale/p.d, sw = sh*sp.aspect*widthMulOf();
-    const u = (AX - (p.x-sw/2))/sw, v = (AY - (p.y-sh/2))/sh;
-    if(u<0||u>1||v<0||v>1) continue;
-    if(S.alphaHit && sp.alpha){
-      const px = clamp((u*sp.w)|0, 0, sp.w-1);
-      const py = clamp((v*sp.h)|0, 0, sp.h-1);
-      if(sp.alpha[py*sp.w+px] < 90) continue;   // 背景（透明部分）は当たらない
-    }
-    if(task.canHitAt){
-      // 弾が当たった点のワールド座標。壁に隠れている部分は撃ち抜けない
-      const wide = targetHeight(t)*sp.hScale*sp.aspect*widthMulOf();
-      if(!task.canHitAt(t, t.x + (u-0.5)*wide, S)) continue;
+    if(p.d > block) continue;                     // 柱などの陰にいる
+    let sh, sw;
+    if(t.shape){
+      // 球・柱・箱。形どおりに当たりを取る
+      const k = f/p.d;
+      if(t.shape === 'sphere'){
+        sh = sw = 2*t.r*k;
+        if((AX-p.x)**2 + (AY-p.y)**2 > (t.r*k)**2) continue;
+      }else{
+        sw = (t.w || 2*t.r)*k; sh = t.h*k;
+        if(Math.abs(AX-p.x) > sw/2 || Math.abs(AY-p.y) > sh/2) continue;
+      }
+    }else{
+      const sp = spriteOf(t); if(!sp) continue;
+      sh = f*targetHeight(t)*sp.hScale/p.d; sw = sh*sp.aspect*widthMulOf();
+      const u = (AX - (p.x-sw/2))/sw, v = (AY - (p.y-sh/2))/sh;
+      if(u<0||u>1||v<0||v>1) continue;
+      if(t.headOnly && v > t.headOnly) continue;  // 頭（上から決まった割合）にしか当たらない
+      if(S.alphaHit && sp.alpha){
+        const px = clamp((u*sp.w)|0, 0, sp.w-1);
+        const py = clamp((v*sp.h)|0, 0, sp.h-1);
+        if(sp.alpha[py*sp.w+px] < 90) continue;   // 背景（透明部分）は当たらない
+      }
+      if(task.canHitAt){
+        // 弾が当たった点のワールド座標。壁に隠れている部分は撃ち抜けない
+        const wide = targetHeight(t)*sp.hScale*sp.aspect*widthMulOf();
+        if(!task.canHitAt(t, t.x + (u-0.5)*wide, S)) continue;
+      }
     }
     if(!best || p.d < best.p.d) best = {t, p, sh, sw, ax:AX, ay:AY};
   }
   return best;
 }
 
+/* クロスヘアの先にある一番近い柱（task.occluders）までの距離。無ければ Infinity。
+   柱は縦の円柱として、目から視線の向きへ伸ばした線との交わりを求める。 */
+function occluderDistance(){
+  if(!task.occluders) return Infinity;
+  const cp = Math.cos(cam.pitch);
+  const dx = -Math.sin(cam.yaw)*cp, dy = Math.sin(cam.pitch), dz = -Math.cos(cam.yaw)*cp;
+  let best = Infinity;
+  for(const o of task.occluders){
+    const a = dx*dx + dz*dz; if(a < 1e-9) continue;
+    const b = -2*(dx*o.x + dz*o.z), c = o.x*o.x + o.z*o.z - o.r*o.r;
+    const disc = b*b - 4*a*c; if(disc < 0) continue;
+    const s = (-b - Math.sqrt(disc)) / (2*a);
+    if(s <= 0) continue;
+    const y = EYE + s*dy;
+    if(y >= o.y0 && y <= o.y1 && s < best) best = s;
+  }
+  return best;
+}
+
+// 得点の表示。KovaaK's の点（1 ダメージ 0.1 点など）は端数が出るので、小数 1 桁まで出す
+function fmtScore(v){
+  const r = Math.round(v*10)/10;
+  return r.toLocaleString(undefined, { maximumFractionDigits:1 });
+}
+
 /* ── 射撃 ── */
 function shoot(){
   if(mode!=='playing' || G.phase!=='live') return;   // カウントダウン中は撃てない
   if(task.tracking) return;                          // 追従タスクは撃たない
+  // 単発の武器は、次に撃てるまでの間がある（例: Guardian は 0.19 秒）
+  const now = performance.now();
+  if(task.fireCooldown && now - (G.lastShotAt||0) < task.fireCooldown*1000) return;
+  G.lastShotAt = now;
   G.shots++; sfxShot();
 
   const best = targetUnderCrosshair();
   const AX = best ? best.ax : aimPt()[0], AY = best ? best.ay : aimPt()[1];
 
   if(best) killTarget(best, task.scoreOnHit(G, best.t), AX, AY);
+  else if(task.missPenalty) G.score -= task.missPenalty;   // 外すと減点（本家の ScoreLossPerMiss）
 }
 
 /* 的を倒す。射撃と、体力のある追従タスク（追って削り切る）で共用する。
@@ -2019,10 +2183,10 @@ function killTarget(best, gain, ax, ay){
   G.ttks.push(now - G.lastHit); G.lastHit=now;
   if(task.onHit) task.onHit(G, best.t);
   if(S.hitmarker && ax != null) G.fx.push({type:'mark', t:now, x:ax, y:ay});
-  if(S.popups && gain) G.fx.push({type:'pop', x:best.p.x, y:best.p.y-best.sh*0.35, t:now, v:'+'+gain});
-  G.fx.push({type:'ring', x:best.p.x, y:best.p.y, r:best.sw*0.5, t:now});
+  if(S.popups && gain) G.fx.push({type:'pop', x:best.p.x, y:best.p.y-best.sh*0.35, t:now, v:'+'+fmtScore(gain)});
+  G.fx.push({type:'ring', x:best.p.x, y:best.p.y, r:Math.max(6, best.sw*0.5), t:now});
   sfxHit();
-  sfxVoice(best.t.sp);           // 倒したキャラのボイス
+  if(!best.t.shape) sfxVoice(best.t.sp);     // 倒したキャラのボイス（球などの的には無い）
   spawn();
 }
 
@@ -2033,8 +2197,17 @@ const TRACK_STEP_MS = 100, TRACK_STEP_SCORE = 100;
 
 function trackTick(dt){
   const ms = dt*1000, now = performance.now();
-  const hit = targetUnderCrosshair();
+  // 撃ちっぱなしの武器（holdFire）は、ボタンを押している間だけ当たる
+  const hit = (task.holdFire && !G.firing) ? null : targetUnderCrosshair();
   for(const t of G.targets) t.tracked = false;
+
+  // 当てていない的は、少し待ってから体力が戻る（本家の HealthRegenPerSec / HealthRegenDelay）
+  if(task.regen){
+    for(const t of G.targets){
+      if(t.dead || t.hp == null || t === hit?.t) continue;
+      if(G.elapsed - (t.hurtAt ?? -9) >= task.regenDelay) t.hp = Math.min(t.maxHp, t.hp + task.regen*dt);
+    }
+  }
 
   if(hit){
     hit.t.tracked = true;
@@ -2043,33 +2216,40 @@ function trackTick(dt){
     G.streakMs += ms;
     if(G.streakMs > G.bestStreak) G.bestStreak = G.streakMs;
     G.trackBy[hit.t.sp] = (G.trackBy[hit.t.sp]||0) + ms;
-    // たまった時間を 0.1 秒刻みで得点に換える。
-    // 差分ではなく整数の段数で数える（1/60 秒の積み上げで 999.999… になり
-    // ちょうど区切りの1回を取りこぼすため）。
-    const steps = Math.floor((G.trackMs + 1e-6) / TRACK_STEP_MS);
-    const owed  = steps - G.scoredSteps;
-    if(owed > 0){
-      G.scoredSteps = steps;
-      G.score += owed*TRACK_STEP_SCORE;
-      G.pointsBy[hit.t.sp] = (G.pointsBy[hit.t.sp]||0) + owed*TRACK_STEP_SCORE;
+
+    let gained = 0;
+    if(task.dps){
+      // 本家と同じ数え方: 毎秒 dps のダメージ × 1 ダメージあたりの点
+      const dmg = task.dps*dt;
+      gained = dmg*task.perDmg;
+      hit.t.hurtAt = G.elapsed;
+      if(hit.t.hp != null) hit.t.hp -= dmg;
+    }else{
+      // たまった時間を 0.1 秒刻みで得点に換える。
+      // 差分ではなく整数の段数で数える（1/60 秒の積み上げで 999.999… になり
+      // ちょうど区切りの1回を取りこぼすため）。
+      const steps = Math.floor((G.trackMs + 1e-6) / TRACK_STEP_MS);
+      const owed  = steps - G.scoredSteps;
+      if(owed > 0){ G.scoredSteps = steps; gained = owed*TRACK_STEP_SCORE; }
+    }
+    if(gained){
+      G.score += gained;
+      G.pointsBy[hit.t.sp] = (G.pointsBy[hit.t.sp]||0) + gained;
     }
 
     // 連続中はひとつの数字が積み上がっていく（APEX のダメージ表示のように）
     if(!G.pop || G.pop.detachedAt) G.pop = { value:0, lastAdd:0, detachedAt:0 };
     G.pop.wx = hit.t.x;
-    G.pop.wy = hit.t.y + targetHeight(hit.t)*0.42;
+    G.pop.wy = hit.t.y + (hit.t.shape ? (hit.t.r || hit.t.h/2) : targetHeight(hit.t)*0.42);
     G.pop.wz = hit.t.z;
     G.pop.off = hit.sw*0.5 + 8;        // 的の肩口に置く（体に重ねない）
-    if(owed > 0){
-      G.pop.value += owed*TRACK_STEP_SCORE;
-      G.pop.lastAdd = now;
+    if(gained){
+      G.pop.value += gained;
+      if(!task.dps || now - G.pop.lastAdd > 100) G.pop.lastAdd = now;   // 跳ねる表示は 0.1 秒に 1 回まで
     }
 
-    // 体力のある的は、乗せ続けた時間で削れて倒れる（ターゲットスイッチ）
-    if(hit.t.hp != null){
-      hit.t.hp -= ms;
-      if(hit.t.hp <= 0) killTarget(hit, 0);
-    }
+    // 体力を削り切ったら倒れる（ターゲットスイッチ・削り切りのタスク）
+    if(hit.t.hp != null && hit.t.hp <= 0) killTarget(hit, task.perKill || 0);
   }else{
     // すぐには切らない。少し外しても連続は続く。
     G.offMs += ms;
@@ -2095,7 +2275,7 @@ function drawTrackPop(now){
   const pr = project(c);
   const pulse = Math.max(0, 1 - (now - p.lastAdd)/150);      // 加算のたび一瞬跳ねる
   const size  = clamp(900/pr.d, 11, 26) * (1 + pulse*0.25);
-  const txt   = p.value.toLocaleString();
+  const txt   = fmtScore(p.value);
   const off   = p.off || size*0.5;
 
   ctx.save();
@@ -2127,7 +2307,8 @@ function frame(now){
   bg.addColorStop(0, THEME.top); bg.addColorStop(0.55, THEME.mid); bg.addColorStop(1, THEME.bottom);
   ctx.fillStyle=bg; ctx.fillRect(0,0,W,H);
 
-  if(S.showRoom) drawRoom();
+  // 本家のマップに合わせた広さ（arena）を持つタスクは、その床と壁を描く
+  if(S.showRoom){ if(task.arena && mode!=='menu') drawArena(task.arena); else drawRoom(); }
   if(mode!=='menu' && task.drawDecor) task.drawDecor(S);
   if(mode==='playing' && G.phase==='live' && task.update) task.update(G, dt, now, S);
 
@@ -2169,15 +2350,56 @@ function frame(now){
 }
 redraw();
 
+/* 球・柱・箱の的（KovaaK's の Spheroid / Cylindrical / Cuboid）。
+   当てているあいだは白っぽく光る（本家の EnemyBodyColorOnHit）。倒れたら一瞬で消える。 */
+const SHAPE_DEATH_MS = 140;
+function drawShape(t, p, now){
+  let a = Math.min(1, (now - t.born)/90), k = 1;
+  if(t.dead){
+    const e = (now - t.diedAt)/SHAPE_DEATH_MS;
+    if(e >= 1) return;
+    a *= 1 - e; k = 1 + e*0.4;
+  }
+  const s = f/p.d*k;
+  const lit = t.tracked && (!task.holdFire || G.firing);
+  ctx.globalAlpha = a;
+  if(t.shape === 'sphere'){
+    const R = Math.max(1.2, t.r*s);
+    if(t.style === 'pokeball'){
+      ctx.beginPath(); ctx.arc(p.x, p.y, R, Math.PI, 0); ctx.fillStyle = '#E3262B'; ctx.fill();
+      ctx.beginPath(); ctx.arc(p.x, p.y, R, 0, Math.PI); ctx.fillStyle = '#F4F4F4'; ctx.fill();
+      ctx.fillStyle = '#111'; ctx.fillRect(p.x - R, p.y - R*0.09, 2*R, R*0.18);
+      ctx.beginPath(); ctx.arc(p.x, p.y, R*0.3, 0, 7); ctx.fillStyle = '#111'; ctx.fill();
+      ctx.beginPath(); ctx.arc(p.x, p.y, R*0.18, 0, 7); ctx.fillStyle = '#FFF'; ctx.fill();
+    }else{
+      const g = ctx.createRadialGradient(p.x - R*0.35, p.y - R*0.4, R*0.1, p.x, p.y, R);
+      g.addColorStop(0, lit ? '#FFFFFF' : shade(t.color, 0.35));
+      g.addColorStop(0.55, lit ? shade(t.color, 0.6) : t.color);
+      g.addColorStop(1, shade(t.color, -0.45));
+      ctx.beginPath(); ctx.arc(p.x, p.y, R, 0, 7); ctx.fillStyle = g; ctx.fill();
+    }
+  }else{
+    const w = Math.max(1.5, (t.w || 2*t.r)*s), h = Math.max(1.5, t.h*s);
+    const g = ctx.createLinearGradient(p.x - w/2, 0, p.x + w/2, 0);
+    g.addColorStop(0, shade(t.color, -0.35));
+    g.addColorStop(0.4, lit ? shade(t.color, 0.6) : t.color);
+    g.addColorStop(1, shade(t.color, -0.5));
+    ctx.fillStyle = g; ctx.fillRect(p.x - w/2, p.y - h/2, w, h);
+  }
+  ctx.globalAlpha = 1;
+}
+
 function drawTargets(now){
   const list=[];
   for(const t of G.targets){
-    const sp = spriteOf(t); if(!sp) continue;
+    const sp = t.shape ? null : spriteOf(t);
+    if(!t.shape && !sp) continue;
     const c=toCam(t); if(c.z>-0.2) continue;
     list.push({t, c, sp});
   }
   list.sort((a,b)=>a.c.z-b.c.z);   // 遠い順に描画
   for(const {t,c,sp} of list){
+    if(t.shape){ drawShape(t, project(c), now); continue; }
     const p=project(c);
     const grow = Math.min(1,(now-t.born)/90);
     let a=1, k=1;
@@ -2345,7 +2567,7 @@ function updateHud(){
   const left = Math.max(0, runDur() - played);
   $('#hClock').textContent = left.toFixed(1);
   $('#hClockWrap').classList.toggle('low', left<=10);
-  $('#hScore').textContent = G.score.toLocaleString();
+  $('#hScore').textContent = fmtScore(G.score);
   if(task.tracking){
     $('#hAccLabel').textContent = 'On Target';
     $('#hKpsLabel').textContent = 'Streak';
@@ -2523,6 +2745,7 @@ document.addEventListener('pointerlockchange', ()=>{
     $('#armed').textContent = 'クリックしてマウスを固定';
   }
   syncCursor();
+  if(!locked) G.firing = false;
   if(!locked && aimMode==='lock' && mode==='playing'){
     mode='paused'; $('#pause').classList.remove('hidden');
   }
@@ -2588,8 +2811,11 @@ cv.addEventListener('mousedown', e=>{
   e.preventDefault();
   // ロックの有無にかかわらず必ず撃つ。ロックはあくまで「できれば」。
   if(aimMode==='lock' && document.pointerLockElement!==cv && !lockBlocked) lockPointer();
-  else shoot();
+  else{ G.firing = true; shoot(); }
 });
+// 撃ちっぱなしの武器は、ボタンを離すまで撃ち続ける
+document.addEventListener('mouseup', e=>{ if(e.button===0) G.firing = false; });
+window.addEventListener('blur', ()=>{ G.firing = false; });
 cv.addEventListener('contextmenu', e=>e.preventDefault());
 
 // 「マウスを固定する」: 設定で簡易FPS視点を選んでいた場合も、固定する方式へ戻す
@@ -2792,7 +3018,7 @@ function renderDetail(){
   $('#dDur').innerHTML = runDur()+'<small>s</small>';
   $('#dCon').textContent = task.conLabel || task.fixedConcurrent || S.concurrent;
   const rec = BEST[task.id];
-  $('#dBest').textContent = rec?.score ? rec.score.toLocaleString() : '—';
+  $('#dBest').textContent = rec?.score ? fmtScore(rec.score) : '—';
   $('#dBestAcc').textContent = rec?.acc ? rec.acc.toFixed(1)+'%' : '—';
   setGoal($('#dAccGoal'), rec?.acc);
 }
@@ -2939,13 +3165,13 @@ $('#rCopy').onclick = ()=>{
     tally = '\n';
     names.forEach((n,i)=>{
       tally += n.padEnd(wide) + String(G.killsBy[i]||0).padStart(3)
-             + ' kills   ' + (G.pointsBy[i]||0).toLocaleString() + '\n';
+             + ' kills   ' + fmtScore(G.pointsBy[i]||0) + '\n';
     });
   }
   const txt =
     '```\n'+
     '🎯 '+task.name.toUpperCase()+' — '+runDur()+'s\n'+
-    'SCORE   '+G.score.toLocaleString()+'\n'+
+    'SCORE   '+fmtScore(G.score)+'\n'+
     'ACC     '+acc.toFixed(1)+'%  ('+G.hits+'/'+G.shots+')\n'+
     'KPS     '+(G.hits/runDur()).toFixed(2)+'\n'+
     'SENS    '+S.sens+' @ '+S.dpi+'dpi  (eDPI '+Math.round(S.sens*S.dpi)+')\n'+
