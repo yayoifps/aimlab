@@ -1,4 +1,9 @@
 <meta charset="utf-8">
+<!-- 読み込んでよいものを決めておく。外から来てよいのは Google Fonts だけで、
+     それ以外の読み込みや外への送信（fetch・フォーム・別のスクリプト）はブラウザーが止める。
+     画像と音声はページに埋め込んだ data: だけ。 -->
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline' https://fonts.googleapis.com; font-src https://fonts.gstatic.com; img-src data: blob:; media-src data: blob:; connect-src 'none'; base-uri 'none'; form-action 'none'">
+<meta name="referrer" content="no-referrer">
 <title>Cutout Range</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -1083,8 +1088,10 @@ function drawFloorShadow(t, r){
 /* ── Air Angelic 4 Voltaic Easy ──
    空中をなめらかに飛ぶ的を追う（Voltaic の空中トラッキング）。
    向きは「曲がる速さ」をゆっくり変えて決めるので、急に折れずに弧を描く。
-   Easy なので的は大きめ・ゆっくりめ。 */
-const AIR = { z:-12, zSwing:2.5, y0:4.0, hw:6.0, hh:1.9, speed:4.2, turn:2.6 };
+   Easy なので的は大きめ・ゆっくりめ。
+   飛ぶ範囲は、床すれすれ（目の高さより下）から高い所まで・左右はほぼ画面いっぱい。
+   狭いと手首だけで追えてしまい、腕を使って縦横に追う練習にならないため。 */
+const AIR = { z:-11, zSwing:2.0, y0:4.1, hw:8.0, hh:3.2, speed:4.6, turn:2.6, edge:0.78 };
 
 definePlaylistTask({
   id:'air-angelic', name:'Air Angelic 4 Voltaic Easy', jp:'空中の追従', category:'TRACKING', glyph:'trk',
@@ -1102,7 +1109,7 @@ definePlaylistTask({
     t.turn += (t.turnTo - t.turn) * Math.min(1, dt*4);          // 曲がり方も急に変えない
     // 飛べる範囲の端に近づいたら、真ん中のほうへ舵を切る
     const ex = t.x/AIR.hw, ey = (t.y-AIR.y0)/AIR.hh, r = ex*ex + ey*ey;
-    if(r > 0.6) t.heading += wrapAng(Math.atan2(-ey, -ex) - t.heading) * Math.min(1, dt*3*(r-0.6)*2.5);
+    if(r > AIR.edge) t.heading += wrapAng(Math.atan2(-ey, -ex) - t.heading) * Math.min(1, dt*3*(r-AIR.edge)*4);
     t.heading += t.turn*dt;
     t.x = clamp(t.x + Math.cos(t.heading)*AIR.speed*dt, -AIR.hw, AIR.hw);
     t.y = clamp(t.y + Math.sin(t.heading)*AIR.speed*dt, AIR.y0-AIR.hh, AIR.y0+AIR.hh);
@@ -2460,9 +2467,22 @@ function useSwivelAim(auto){
   syncCursor();
 }
 
+/* 固定に失敗しても、1回では諦めない。
+   Chrome は Esc で固定を外した直後（約1秒）の再要求を断るので、一時停止から
+   すぐ再開すると必ず1回失敗する。そのときは「クリックしてマウスを固定」を出して待ち、
+   次のクリックでもう一度頼む。続けて失敗するとき（埋め込み枠など本当に使えない環境）だけ
+   簡易FPS視点へ切り替える。 */
+const LOCK_GIVE_UP = 3;
+let lockFails = 0, lockTry = 0, lockFail = null;
+function lockFailed(){ if(++lockFails >= LOCK_GIVE_UP) useSwivelAim(true); }
+
 function lockPointer(){
   if(S.aimPref==='swivel'){ useSwivelAim(false); return; }
   if(lockBlocked || !cv.requestPointerLock){ useSwivelAim(true); return; }
+  if(document.pointerLockElement===cv) return;
+  // 1回の要求につき失敗は1回だけ数える（Promise の拒否と pointerlockerror が両方来るため）
+  const my = ++lockTry; let settled = false;
+  const fail = lockFail = ()=>{ if(settled || my!==lockTry) return; settled = true; lockFailed(); };
   let p;
   try{ p = cv.requestPointerLock({ unadjustedMovement:true }); }
   catch(e){ p = undefined; }
@@ -2470,21 +2490,21 @@ function lockPointer(){
     // raw input が拒否された場合は通常のポインタロックで再試行
     p.catch(()=>{ try{
       const q = cv.requestPointerLock();
-      if(q && q.catch) q.catch(()=>useSwivelAim(true));
-    }catch(e){ useSwivelAim(true); } });
+      if(q && q.catch) q.catch(fail);
+    }catch(e){ fail(); } });
   }else if(p===undefined){
-    try{ cv.requestPointerLock(); }catch(e){ useSwivelAim(true); return; }
+    try{ cv.requestPointerLock(); }catch(e){ fail(); return; }
   }
-  // Promise を返さない実装／サイレント失敗のための保険
+  // Promise を返さない実装／何も起きない失敗のための保険
   setTimeout(()=>{
-    if(mode!=='menu' && aimMode==='lock' && document.pointerLockElement!==cv) useSwivelAim(true);
-  }, 400);
+    if(mode!=='menu' && aimMode==='lock' && document.pointerLockElement!==cv) fail();
+  }, 1500);
 }
 
-document.addEventListener('pointerlockerror', ()=>useSwivelAim(true));
+document.addEventListener('pointerlockerror', ()=>{ if(lockFail) lockFail(); });
 document.addEventListener('pointerlockchange', ()=>{
   const locked = document.pointerLockElement===cv;
-  if(locked){ aimMode='lock'; $('#modeNote').classList.add('hidden'); }
+  if(locked){ aimMode='lock'; lockFails = 0; $('#modeNote').classList.add('hidden'); }
   syncCursor();
   if(!locked && aimMode==='lock' && mode==='playing'){
     mode='paused'; $('#pause').classList.remove('hidden');
@@ -2537,7 +2557,7 @@ cv.addEventListener('mousedown', e=>{
 });
 cv.addEventListener('contextmenu', e=>e.preventDefault());
 
-$('#retryLock').onclick = ()=>{ lockBlocked=false; aimMode='lock'; $('#modeNote').classList.add('hidden'); lockPointer(); };
+$('#retryLock').onclick = ()=>{ lockBlocked=false; lockFails=0; aimMode='lock'; $('#modeNote').classList.add('hidden'); lockPointer(); };
 $('#openTab').onclick   = ()=>{ window.open(location.href, '_blank', 'noopener'); };
 
 function toggleFullscreen(){
