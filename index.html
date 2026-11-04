@@ -449,10 +449,10 @@ button{cursor:pointer;}
   </div>
   <div id="armed" style="opacity:0">クリックしてマウスを固定</div>
   <div id="modeNote" class="hidden">
-    <span><b>簡易FPS視点</b> — マウスを画面に固定できない環境のため、カーソル位置で視点を回しています。本来の振り向き感度で遊ぶには新しいタブで開いてください。</span>
+    <span><b>簡易FPS視点</b> — マウスを固定していないので、カーソルが画面の端に着くと視点が止まります。「マウスを固定」を押すと、どこまでも振り向けるようになります。</span>
+    <button id="retryLock" type="button">マウスを固定</button>
     <button id="goFull" type="button">全画面</button>
     <button id="openTab" type="button">新しいタブ</button>
-    <button id="retryLock" type="button">再試行</button>
   </div>
 </div>
 
@@ -562,7 +562,7 @@ button{cursor:pointer;}
           <option value="auto">ポインタロック（推奨）</option>
           <option value="swivel">簡易FPS視点</option>
         </select></label>
-      <label class="ctl"><span>振り向き幅<small>簡易FPS視点のみ／画面端まで動かしたときの角度</small></span>
+      <label class="ctl"><span>振り向き幅<small>簡易FPS視点のみ／画面の半分を動かしたときの角度</small></span>
         <input type="range" data-bind="swivelRange" min="10" max="90" step="1">
         <input type="number" class="num" data-bind="swivelRange" min="5" max="120" step="1"></label>
 
@@ -1401,7 +1401,7 @@ const DEFAULTS = {
   deathTime:0.4,
   sideSwap:4, strafeSpan:3.5, strafeSpeed:'both',
   strafeDist:12, speedMul:0.65, respawnDelay:0.4, widthMul:0.78,
-  lsDist:12, lsSpan:7, lsSpeed:0.62, lsFlip:2.2, sv3:2, trackGrace:0.3,
+  lsDist:12, lsSpan:7, lsSpeed:0.62, lsFlip:2.2, sv3:2, sv4:1, trackGrace:0.3,
   volume:0.5, voiceVol:0.75, voiceOn:true, sv2:2,
   showRoom:true, hitmarker:true, popups:true, rim:true, rimW:2, shatter:true,
   bgColor:'#0A1015',
@@ -1448,6 +1448,8 @@ if(STORED.sv2 !== DEFAULTS.sv2){
 }
 // Long Strafes の距離を詰めたので、保存済みの値も一度だけ新しい既定に戻す
 if(STORED.sv3 !== DEFAULTS.sv3){ S.lsDist = DEFAULTS.lsDist; S.sv3 = DEFAULTS.sv3; }
+// マウスの固定が壊れていた間に簡易FPS視点を選んだ人がいるので、一度だけ固定する方式へ戻す
+if(STORED.sv4 !== DEFAULTS.sv4){ S.aimPref = 'auto'; S.sv4 = DEFAULTS.sv4; }
 let BEST = loadJSON(STORE+':best') || {};
 let LAST = loadJSON(STORE+':last') || {};   // 直前のランの成績（タスクごと）
 
@@ -1720,8 +1722,7 @@ const G = {
   shots:0, hits:0, score:0, lastHit:0, ttks:[], killsBy:[], pointsBy:[],
   trackMs:0, scoredSteps:0, streakMs:0, bestStreak:0, offMs:0, trackBy:[], pop:null, ts:{}
 };
-const swBase = { yaw:0, pitch:0 };      // 簡易FPS視点の基準角（＝的の中心）
-const swOrigin = { x:0, y:0 };          // その基準に対応するカーソル位置
+const swOrigin = { x:0, y:0 };          // 簡易FPS視点で、前回視点に反映したカーソル位置
 const lastCursor = { x:0, y:0 };
 
 // キャラの表示名（build_sprites.py が names.json から埋め込む）
@@ -1779,7 +1780,6 @@ function aimAtGridCenter(){
     cam.yaw   = -Math.atan2(c.x, -c.z);
     cam.pitch =  Math.atan2(c.y-EYE, Math.hypot(c.x,c.z));
   }
-  swBase.yaw = cam.yaw; swBase.pitch = cam.pitch;
   swOrigin.x = lastCursor.x; swOrigin.y = lastCursor.y;
 }
 
@@ -2452,7 +2452,7 @@ function drawChPreview(){
 /* 照準モード — どちらもクロスヘアは画面中央固定の一人称視点。
    lock   : ポインタロック。マウス移動量で視点を回す（VALORANT と同じ感度計算）。
    swivel : ポインタロックが使えない環境（iframe 等）向けのフォールバック。
-            カーソルの位置に応じて視点が回る。振り向き量は「振り向き幅」で決まる。 */
+            カーソルを動かした分だけ視点が回る。回る量は「振り向き幅」で決まる。 */
 let aimMode = 'lock';
 let lockBlocked = false;
 const aimPt = () => [W/2, H/2];        // 照準は常に画面中央
@@ -2460,21 +2460,32 @@ const aimPt = () => [W/2, H/2];        // 照準は常に画面中央
 function isAiming(){ return mode==='playing' && (aimMode==='swivel' || document.pointerLockElement===cv); }
 function syncCursor(){ cv.classList.toggle('aiming', isAiming()); }
 
+// 簡易FPS視点の間は、プレイ中ずっとその旨を出しておく（画面の端で視点が止まる理由が分かるように）
 function useSwivelAim(auto){
   aimMode = 'swivel';
   if(auto) lockBlocked = true;
-  $('#modeNote').classList.toggle('hidden', !(auto && mode!=='menu'));
+  $('#modeNote').classList.toggle('hidden', mode==='menu');
   syncCursor();
 }
 
-/* 固定に失敗しても、1回では諦めない。
+/* 固定に失敗しても、勝手に簡易FPS視点へは切り替えない。
+   簡易FPS視点はカーソルが画面の端に着くと視点が止まり、見えない壁に当たったように
+   なるので、ふだんのタブでは使わせない。
    Chrome は Esc で固定を外した直後（約1秒）の再要求を断るので、一時停止から
-   すぐ再開すると必ず1回失敗する。そのときは「クリックしてマウスを固定」を出して待ち、
-   次のクリックでもう一度頼む。続けて失敗するとき（埋め込み枠など本当に使えない環境）だけ
-   簡易FPS視点へ切り替える。 */
+   すぐ再開すると1回失敗する。そのときは「クリックしてマウスを固定」を出して待ち、
+   次のクリックでもう一度頼む。
+   埋め込み枠（iframe）の中は固定そのものが許されないことがあるので、そこだけ
+   3回続けて失敗したら簡易FPS視点へ切り替える。 */
 const LOCK_GIVE_UP = 3;
+const IN_FRAME = (()=>{ try{ return window.self !== window.top; }catch(e){ return true; } })();
 let lockFails = 0, lockTry = 0, lockFail = null;
-function lockFailed(){ if(++lockFails >= LOCK_GIVE_UP) useSwivelAim(true); }
+function lockFailed(){
+  lockFails++;
+  if(IN_FRAME && lockFails >= LOCK_GIVE_UP){ useSwivelAim(true); return; }
+  $('#armed').textContent = lockFails >= LOCK_GIVE_UP
+    ? 'ブラウザーがマウスの固定を断っています。もう一度クリックしてください'
+    : 'クリックしてマウスを固定';
+}
 
 function lockPointer(){
   if(S.aimPref==='swivel'){ useSwivelAim(false); return; }
@@ -2504,7 +2515,10 @@ function lockPointer(){
 document.addEventListener('pointerlockerror', ()=>{ if(lockFail) lockFail(); });
 document.addEventListener('pointerlockchange', ()=>{
   const locked = document.pointerLockElement===cv;
-  if(locked){ aimMode='lock'; lockFails = 0; $('#modeNote').classList.add('hidden'); }
+  if(locked){
+    aimMode='lock'; lockFails = 0; $('#modeNote').classList.add('hidden');
+    $('#armed').textContent = 'クリックしてマウスを固定';
+  }
   syncCursor();
   if(!locked && aimMode==='lock' && mode==='playing'){
     mode='paused'; $('#pause').classList.remove('hidden');
@@ -2524,28 +2538,20 @@ document.addEventListener('mousemove', e=>{
     lastCursor.x = e.clientX - r.left;
     lastCursor.y = e.clientY - r.top;
     if(aimMode==='swivel' && mode==='playing' && G.phase==='live') applySwivel();
+    else{ swOrigin.x = lastCursor.x; swOrigin.y = lastCursor.y; }   // 遊び始めに視点が跳ばないように
   }
 });
 
-/* 簡易FPS視点。基準カーソル位置からのズレで視点を回す。
-   振り向き限界に達したら基準そのものをずらす（ジョイスティックが中央に戻る動き）。
-   こうしておくと、カーソルが画面端に貼り付いても操作不能にならない。 */
+/* 簡易FPS視点。カーソルを動かした分だけ視点を回す（振り向き幅＝画面の半分を動かしたときの角度）。
+   前は基準の向きから ±振り向き幅 で視点を止めていたが、それが「何もない所の壁」になっていた。
+   今は角度に上限を付けない（上下だけ真上・真下の手前で止める）。
+   カーソルが画面の端に着くとそれ以上は動けないので、遊ぶならマウスの固定がおすすめ。 */
 function applySwivel(){
   const k = (S.swivelRange / (W/2)) * DEG;        // ラジアン / px
   const iv = S.invertY ? -1 : 1;
-  const yawLim   = S.swivelRange * DEG;
-  const pitchLim = Math.max(15, S.swivelRange * (H/W)) * DEG;
-
-  let dy = -(lastCursor.x - swOrigin.x) * k;
-  if(dy >  yawLim){ swOrigin.x = lastCursor.x + yawLim/k; dy =  yawLim; }
-  if(dy < -yawLim){ swOrigin.x = lastCursor.x - yawLim/k; dy = -yawLim; }
-
-  let dp = -(lastCursor.y - swOrigin.y) * k * iv;
-  if(dp >  pitchLim){ swOrigin.y = lastCursor.y + iv*pitchLim/k; dp =  pitchLim; }
-  if(dp < -pitchLim){ swOrigin.y = lastCursor.y - iv*pitchLim/k; dp = -pitchLim; }
-
-  cam.yaw   = swBase.yaw + dy;
-  cam.pitch = clamp(swBase.pitch + dp, -89*DEG, 89*DEG);
+  cam.yaw   -= (lastCursor.x - swOrigin.x) * k;
+  cam.pitch  = clamp(cam.pitch - (lastCursor.y - swOrigin.y) * k * iv, -89*DEG, 89*DEG);
+  swOrigin.x = lastCursor.x; swOrigin.y = lastCursor.y;
 }
 
 cv.addEventListener('mousedown', e=>{
@@ -2557,7 +2563,12 @@ cv.addEventListener('mousedown', e=>{
 });
 cv.addEventListener('contextmenu', e=>e.preventDefault());
 
-$('#retryLock').onclick = ()=>{ lockBlocked=false; lockFails=0; aimMode='lock'; $('#modeNote').classList.add('hidden'); lockPointer(); };
+// 「マウスを固定する」: 設定で簡易FPS視点を選んでいた場合も、固定する方式へ戻す
+$('#retryLock').onclick = ()=>{
+  lockBlocked=false; lockFails=0; aimMode='lock';
+  if(S.aimPref==='swivel'){ S.aimPref='auto'; saveAll(); syncInputs(); }
+  $('#modeNote').classList.add('hidden'); lockPointer();
+};
 $('#openTab').onclick   = ()=>{ window.open(location.href, '_blank', 'noopener'); };
 
 function toggleFullscreen(){
