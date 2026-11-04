@@ -557,11 +557,13 @@ button{cursor:pointer;}
 
     <div class="pane" data-pane="sens">
       <div class="sect">Aim Mode</div>
-      <label class="ctl wide"><span>照準方式<small>ポインタロックが使えない環境では自動で簡易FPS視点になります</small></span>
+      <label class="ctl wide"><span>照準方式<small>ポインタロック＝マウスを画面に固定してどこまでも振り向ける</small></span>
         <select data-bind="aimPref">
           <option value="auto">ポインタロック（推奨）</option>
           <option value="swivel">簡易FPS視点</option>
         </select></label>
+      <label class="ctl wide"><span>Raw Input（生の入力）<small>マウスの動きを OS の加速なしでそのまま使う（VALORANT と同じ）。固定してもカーソルが別のモニターへ出てしまうときは切る</small></span>
+        <span class="sw"><input type="checkbox" data-bind="rawInput"><i></i></span></label>
       <label class="ctl"><span>振り向き幅<small>簡易FPS視点のみ／画面の半分を動かしたときの角度</small></span>
         <input type="range" data-bind="swivelRange" min="10" max="90" step="1">
         <input type="number" class="num" data-bind="swivelRange" min="5" max="120" step="1"></label>
@@ -1394,7 +1396,7 @@ defineTask({
    ═══════════════════════════════════════════════════════════ */
 const STORE = 'cutout-range-v1';
 const DEFAULTS = {
-  sens:0.40, dpi:800, rawMul:1.0, invertY:false, aimPref:'auto', swivelRange:38,
+  sens:0.40, dpi:800, rawMul:1.0, invertY:false, aimPref:'auto', swivelRange:38, rawInput:true,
   countdown:2, autoFull:true,
   sv:2,                                  // 設定の世代。上げると duration が既定に戻る
   duration:30, concurrent:3, cols:4, rows:3, targetSize:1.5, dist:8.5, alphaHit:true,
@@ -2495,11 +2497,12 @@ function lockPointer(){
   const my = ++lockTry; let settled = false;
   const fail = lockFail = ()=>{ if(settled || my!==lockTry) return; settled = true; lockFailed(); };
   let p;
-  try{ p = cv.requestPointerLock({ unadjustedMovement:true }); }
+  try{ p = S.rawInput ? cv.requestPointerLock({ unadjustedMovement:true }) : cv.requestPointerLock(); }
   catch(e){ p = undefined; }
   if(p && p.catch){
     // raw input が拒否された場合は通常のポインタロックで再試行
     p.catch(()=>{ try{
+      if(!S.rawInput){ fail(); return; }
       const q = cv.requestPointerLock();
       if(q && q.catch) q.catch(fail);
     }catch(e){ fail(); } });
@@ -2525,8 +2528,34 @@ document.addEventListener('pointerlockchange', ()=>{
   }
 });
 
+/* 固定中のカーソル漏れを見つける。
+   正しく固定されていれば、固定中の mousemove の screenX/Y は固定した瞬間の位置のまま動かない。
+   環境によっては（複数モニターで Raw Input を使ったときなど）カーソルが中心に戻されず、
+   別のモニターへ出たり、画面の端で振り向きが止まったりする。
+   screenX/Y が動き続けたら漏れていると見なし、Raw Input をやめて固定し直す。 */
+const leak = { x:0, y:0, n:0, set:false };
+document.addEventListener('pointerlockchange', ()=>{ leak.set = false; leak.n = 0; });
+function watchLeak(e){
+  if(!leak.set){ leak.x = e.screenX; leak.y = e.screenY; leak.set = true; return; }
+  if(Math.abs(e.screenX-leak.x) + Math.abs(e.screenY-leak.y) < 3){ leak.n = 0; return; }
+  leak.x = e.screenX; leak.y = e.screenY;
+  if(++leak.n < 8 || !S.rawInput) return;
+  S.rawInput = false; saveAll(); syncInputs();
+  // 固定したまま Raw Input だけ外す（固定中の頼み直しはクリック無しで通る）
+  try{ const q = cv.requestPointerLock(); if(q && q.catch) q.catch(()=>{}); }catch(err){}
+  toast('カーソルが画面の外へ出ていたので、Raw Input を切りました（設定 → 感度で戻せます）');
+}
+
+// 別のモニターの窓をクリックするなどして、このページから離れたら一時停止にする
+window.addEventListener('blur', ()=>{
+  if(mode!=='playing') return;
+  if(document.pointerLockElement===cv) document.exitPointerLock();
+  mode='paused'; $('#pause').classList.remove('hidden'); syncCursor();
+});
+
 document.addEventListener('mousemove', e=>{
   if(document.pointerLockElement===cv){
+    watchLeak(e);
     const degPerCount = S.sens * 0.07 * S.rawMul;
     cam.yaw   -= e.movementX * degPerCount * DEG;
     cam.pitch -= (S.invertY?-1:1) * e.movementY * degPerCount * DEG;
